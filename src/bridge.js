@@ -37,6 +37,7 @@ import { handleSocialV2StickerRoutes } from './http/socialv2-sticker-routes.js';
 import { handleVoiceRoutes } from './http/voice-routes.js';
 import { handleWaitRoute } from './http/socialv2-wait-route.js';
 import { handleMemoryRoutes } from './http/memory-routes.js';
+import { handleSocialV2MiscRoutes } from './http/socialv2-misc-routes.js';
 import {
   computeWakeSafetyV2,
   defaultWakeConfigV2 as createDefaultWakeConfigV2,
@@ -2963,6 +2964,23 @@ async function main() {
       appendMemoryV2,
       redactKnownTokensOnly
     };
+    const miscRouteDeps = {
+      cfg,
+      log,
+      agentTokenOk,
+      v2SessionAllowed,
+      v2ToolEnabled,
+      readToolLog,
+      clearToolLog: () => { try { fs.writeFileSync(TOOL_LOG_FILE, '', 'utf8'); } catch {} },
+      readFeedbackEntries,
+      appendFeedbackEntry,
+      clearFeedback: () => atomicWriteJson(FEEDBACK_FILE, []),
+      feedbackTimes,
+      truncateText,
+      appendActivity,
+      getSocialV2State,
+      readThroughSeqV2
+    };
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -3558,113 +3576,12 @@ async function main() {
         // ── 二代等待（路由体在 src/http/socialv2-wait-route.js）──────────────
         if (await handleWaitRoute({ req, res, url, sendJson, readBody, deps: waitRouteDeps })) return;
 
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/check-send') {
-          const body = await readBody();
-          const key = String(body.key ?? '').trim();
-          const tool = String(body.tool ?? '').trim();
-          const token = String(body.token ?? '').trim();
-          if (!key || !tool || !token) {
-            sendJson({ ok: false, error: 'key/tool/token 不能为空' }, 400);
-            return;
-          }
-          if (!agentTokenOk(key, token)) {
-            sendJson({ ok: false, error: 'agent token 无效' }, 403);
-            return;
-          }
-          if (!v2SessionAllowed(key)) {
-            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
-            return;
-          }
-          const flagMap = { sendGroup: 'sendGroup', sendPrivate: 'sendPrivate', reply: 'reply' };
-          const flag = flagMap[tool];
-          if (!flag) {
-            sendJson({ ok: false, error: 'tool 必须是 sendGroup/sendPrivate/reply' }, 400);
-            return;
-          }
-          if (!v2ToolEnabled(flag)) {
-            sendJson({ ok: false, error: `工具未启用：qq_${tool === 'sendGroup' ? 'send_group_message' : tool === 'sendPrivate' ? 'send_private_message' : 'reply'}` }, 403);
-            return;
-          }
-          sendJson({ ok: true, key, tool });
-          return;
-        }
         // ── Token 用量 / 花费（控制台专用） ──────────────────────────────────
         // ── 令牌与花费（路由体在 src/http/token-routes.js）────────────────────
         if (await handleTokenRoutes({ req, url, sendJson, deps: tokenRouteDeps })) return;
 
-        // ── 工具调用日志 ─────────────────────────────────────────────────────
-        if (req.method === 'GET' && url.pathname === '/api/socialV2/tool-log') {
-          const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-          sendJson({ ok: true, entries: readToolLog(limit) });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/tool-log/clear') {
-          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
-          try { fs.writeFileSync(TOOL_LOG_FILE, '', 'utf8'); } catch {}
-          log('控制台：工具调用日志已清空');
-          sendJson({ ok: true });
-          return;
-        }
-        // ── 反馈 / 自己消息 / 消息详情 / 活跃成员 ────────────────────────────
-        if (req.method === 'GET' && url.pathname === '/api/socialV2/feedback') {
-          sendJson({ ok: true, entries: readFeedbackEntries() });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/feedback-clear') {
-          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
-          atomicWriteJson(FEEDBACK_FILE, []);
-          log('控制台：清空 AI 反馈');
-          sendJson({ ok: true });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/feedback') {
-          const body = await readBody();
-          const key = String(body.key ?? '').trim();
-          const level = body.level === 'warning' || body.level === 'error' ? body.level : 'info';
-          const rawMessage = String(body.message ?? '').trim();
-          if (!key || !rawMessage) { sendJson({ ok: false, error: 'key 和 message 不能为空' }, 400); return; }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2ToolEnabled('feedback')) { sendJson({ ok: false, error: '工具未启用：qq_report_feedback' }, 403); return; }
-          // 反馈限频：防止持有会话 token 的调用方刷磁盘/日志。
-          const fNow = Date.now();
-          const fTimes = feedbackTimes.get(key) || [];
-          const fRecentMinute = fTimes.filter((t) => fNow - t < 60000).length;
-          const fRecentHour = fTimes.filter((t) => fNow - t < 3600000).length;
-          if (fRecentMinute >= 5 || fRecentHour >= 20) {
-            sendJson({ ok: false, error: '反馈过于频繁，请稍后再试' }, 429);
-            return;
-          }
-          fTimes.push(fNow);
-          feedbackTimes.set(key, fTimes.slice(-100));
-          const maxLength = Math.max(1, Number(cfg.socialV2?.feedback?.maxLength) || 500);
-          const message = truncateText(rawMessage, maxLength);
-          appendFeedbackEntry({ id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), key, level, message, time: new Date().toISOString() });
-          log(`[reserved2] AI 反馈 (${key}) [${level}]: ${message.slice(0, 80)}`);
-          appendActivity(`${key} [reserved2] AI 反馈 [${level}]：${message.slice(0, 80)}`);
-          if (cfg.socialV2?.feedback?.notifyOwnerOnError && level === 'error' && cfg.ownerQQ) {
-            log(`[reserved2] 错误级反馈，可通知 owner ${cfg.ownerQQ}（当前仅记录日志）`);
-          }
-          sendJson({ ok: true, key, level, message });
-          return;
-        }
-        if (req.method === 'GET' && url.pathname === '/api/socialV2/my-recent') {
-          const key = String(url.searchParams.get('key') ?? '').trim();
-          const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 10));
-          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2ToolEnabled('getMyRecent')) { sendJson({ ok: false, error: '工具未启用：qq_get_my_recent_messages' }, 403); return; }
-          const st = getSocialV2State(key);
-          const mine = st.recentMessages.filter((m) => m.isSelf).slice(-limit);
-          sendJson({ ok: true, key, messages: mine, readThroughSeq: readThroughSeqV2(st) });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/record-sent') {
-          // 内部接口不对外开放：防止持有会话 token 的调用方伪造“我说过…”的历史记录。
-          sendJson({ ok: false, error: '该接口仅桥接内部使用，不接受外部调用' }, 403);
-          return;
-        }
+        // ── 杂项（路由体在 src/http/socialv2-misc-routes.js）──────────────────
+        if (await handleSocialV2MiscRoutes({ req, url, sendJson, readBody, deps: miscRouteDeps })) return;
         if (req.method === 'GET' && url.pathname === '/api/socialV2/message-detail') {
           const key = String(url.searchParams.get('key') ?? '').trim();
           const messageId = String(url.searchParams.get('messageId') ?? '').trim();

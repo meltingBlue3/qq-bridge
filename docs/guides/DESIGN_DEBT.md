@@ -32,26 +32,26 @@
 | `src/social-v2/wake-policy.js` | `normalizeSpeakerIdsV2` / `pickWakeTriggersV2` / `defaultWakeConfigV2` / `preSleepWaitBlockedV2` / `computeWakeSafetyV2` / `wakePriorityV2` 等 | reserved2 唤醒策略的纯函数层：默认配置、触发字段过滤、沉睡前观察判定、防永眠、优先级；bridge 只留绑定 `cfg.socialV2.wake` 的薄包装 | `scripts/test-wake-policy.mjs`（8 项） |
 | `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` / 路由组 / `wake-policy`（含 import-as 别名）；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 44/44 |
 
-修复后基线：`npm run test:audit` **58/58 全绿**（修复前为 26/35，含多个因 VM 缺符号而
-超时/误报的脚本）。`bridge.js` 从 11,822 行降到约 8,600 行。
+修复后基线：`npm run test:audit` **59/59 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+超时/误报的脚本）。`bridge.js` 从 11,822 行降到约 8,800 行。
 
 ## 仍然存在的设计债（按优先级）
 
 ### P0 — `bridge.js` 拆分进度（2026-11-03）
 
-已完成外移（均带直接单测，`npm run test:audit` 58/58 全绿）：
+已完成外移（均带直接单测，`npm run test:audit` 59/59 全绿）：
 `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` /
 `http/role-routes` / `http/preset-routes` / `http/security-routes` / `http/dsh-routes` /
 `http/access-routes` / `http/social-routes` / `http/notify-routes` / `http/token-routes` /
 `http/lifecycle-routes` / `http/socialv2-admin-routes` / `http/socialv2-session-routes` /
 `http/socialv2-send-routes` / `http/socialv2-sticker-routes` / `http/voice-routes` /
-`http/socialv2-wait-route` / `http/memory-routes` / `social-v2/wake-policy`。
+`http/socialv2-wait-route` / `http/memory-routes` / `http/socialv2-misc-routes` /
+`social-v2/wake-policy`。
 
 剩余（按优先级）：
-1. `startConsoleServer()` 尾部端点：check-send、tool-log GET+clear、feedback GET+clear+POST、
-   my-recent、record-sent、message-detail、forward-message、forward-media、active-members、
-   group-members、slang query/submit、`/api/authorize/read`、`/api/images/message`、
-   `/api/send/*`（约 700 行）。
+1. `startConsoleServer()` 尾部端点：message-detail、forward-message、forward-media、
+   active-members、group-members、slang query/submit、`/api/authorize/read`、
+   `/api/images/message`、`/api/send/*`（约 500 行）。
 2. reserved2 状态读写（`getSocialV2State` / `loadSocialV2State` / `saveSocialV2State`）与
    唤醒调度（`scheduleWakeV2` / `setupSleepTimerV2` / `sendWakePromptV2` / `scheduleReplyCheckV2`）。
 
