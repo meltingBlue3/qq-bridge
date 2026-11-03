@@ -26,9 +26,10 @@
 | `src/config.js` | `loadConfig()` + `normalizeOwnerQQ` / `normalizeIdList` / `normalizeReasoningEffort` / `applyRoleInjectLimit` | 350 行配置默认值、section 合并、socialV2 深度合并从 `main()` 外移；配置可以脱离桥接进程直接测 | `scripts/test-config.mjs`（5 项） |
 | `src/http-utils.js` | `SECURITY_HEADERS` / `sendJsonResponse` / `readJsonBody` / `isAllowedHost` / `isAllowedOrigin` | 安全响应头、1MB 请求体读取、Host/Origin 回环校验从每个请求闭包外移；可脱开真实 HTTP server 单测 | `scripts/test-http-utils.mjs`（4 项） |
 | `src/initial-prompts.js` | `createInitialPromptStore()` | 初始提示词的加载/保存/只读降级/上限校验从 `main()` 外移；文件损坏时不覆盖原文件的约束可以单测 | `scripts/test-initial-prompts.mjs`（5 项） |
-| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 40/40 |
+| `src/roles.js` | `createRoleStore()` + `sanitizeRoleName` / `validateRoleContent` | 人格卡的列目录、名称/体积校验、读写、注入预警/摘要从 `main()` 外移；注入上限通过 getter 动态读取 | `scripts/test-roles.mjs`（5 项） |
+| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 41/41 |
 
-修复后基线：`npm run test:audit` **40/40 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+修复后基线：`npm run test:audit` **41/41 全绿**（修复前为 26/35，含多个因 VM 缺符号而
 超时/误报的脚本）。
 
 ## 仍然存在的设计债（按优先级）

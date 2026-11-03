@@ -17,8 +17,8 @@ const tests = [
   'test-md-to-plain.mjs', 'test-slang-learn.mjs', 'test-mux-reconnect.mjs',
   'test-token-economy.mjs', 'test-qq-model-view.mjs', 'test-qq-preset-contract.mjs',
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-role-card.mjs',
-  // 设计债抽出的深模块：HTTP 身份×路由授权/请求工具、JSON 原子读写、配置默认值、初始提示词存储。
-  'test-route-policy.mjs', 'test-json-file.mjs', 'test-config.mjs', 'test-http-utils.mjs', 'test-initial-prompts.mjs',
+  // 设计债抽出的深模块：HTTP 身份×路由授权/请求工具、JSON 原子读写、配置默认值、初始提示词/人格卡存储。
+  'test-route-policy.mjs', 'test-json-file.mjs', 'test-config.mjs', 'test-http-utils.mjs', 'test-initial-prompts.mjs', 'test-roles.mjs',
   // 体检修复回归：无令牌智能体调用面、send-burst 失败回滚、唤醒限频重试、
   // 定时器类暂存唤醒补发、collector 生命周期、ownerQQ 覆盖语义、预设名校验、
   // wake triggers 白名单、memory-update 边界、wait 租约归一化、md/黑话/表情/账本；
