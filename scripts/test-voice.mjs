@@ -213,7 +213,9 @@ console.log('## preset 人设已描述语音能力（否则 AI 不知道自己�
 console.log('## 控制台契约');
 {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
-  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
+  // toolFlags 清单已随 socialV2 管理路由搬进 src/http/socialv2-admin-routes.js，两处一起扫。
+  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8')
+    + fs.readFileSync(path.join(ROOT, 'src', 'http', 'socialv2-admin-routes.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
   ok(bridgeSrc.includes("'sendVoice']"), 'config API 的 toolFlags 含 sendVoice');
   const uniq = (a) => [...new Set(a)].sort();
