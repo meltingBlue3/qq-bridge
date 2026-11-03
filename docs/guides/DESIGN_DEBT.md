@@ -32,20 +32,28 @@
 | `src/social-v2/wake-policy.js` | `normalizeSpeakerIdsV2` / `pickWakeTriggersV2` / `defaultWakeConfigV2` / `preSleepWaitBlockedV2` / `computeWakeSafetyV2` / `wakePriorityV2` 等 | reserved2 唤醒策略的纯函数层：默认配置、触发字段过滤、沉睡前观察判定、防永眠、优先级；bridge 只留绑定 `cfg.socialV2.wake` 的薄包装 | `scripts/test-wake-policy.mjs`（8 项） |
 | `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` / 路由组 / `wake-policy`（含 import-as 别名）；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 44/44 |
 
-修复后基线：`npm run test:audit` **44/44 全绿**（修复前为 26/35，含多个因 VM 缺符号而
-超时/误报的脚本）。
+修复后基线：`npm run test:audit` **58/58 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+超时/误报的脚本）。`bridge.js` 从 11,822 行降到约 8,600 行。
 
 ## 仍然存在的设计债（按优先级）
 
-### P0 — `bridge.js` 仍是巨石
+### P0 — `bridge.js` 拆分进度（2026-11-03）
 
-目标不是“一次重写”，而是沿**已经稳定的纯逻辑边界**逐块外移：
+已完成外移（均带直接单测，`npm run test:audit` 58/58 全绿）：
+`route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` /
+`http/role-routes` / `http/preset-routes` / `http/security-routes` / `http/dsh-routes` /
+`http/access-routes` / `http/social-routes` / `http/notify-routes` / `http/token-routes` /
+`http/lifecycle-routes` / `http/socialv2-admin-routes` / `http/socialv2-session-routes` /
+`http/socialv2-send-routes` / `http/socialv2-sticker-routes` / `http/voice-routes` /
+`http/socialv2-wait-route` / `http/memory-routes` / `social-v2/wake-policy`。
 
-1. `startConsoleServer()`（约 3.9k 行）→ `src/http/console-server.js`，以显式
-   `deps` 对象注入；路由策略已经先抽出，拆分时只需接业务处理器。
-2. `reserved2` 的会话状态 / 唤醒调度（约 3k 行）→ `src/social-v2/`，状态形状与
-   时间计算可独立单测。
-3. 一代 `reserved` 状态机 → `src/social-v1/`（低优先级，默认模式已不是它）。
+剩余（按优先级）：
+1. `startConsoleServer()` 尾部端点：check-send、tool-log GET+clear、feedback GET+clear+POST、
+   my-recent、record-sent、message-detail、forward-message、forward-media、active-members、
+   group-members、slang query/submit、`/api/authorize/read`、`/api/images/message`、
+   `/api/send/*`（约 700 行）。
+2. reserved2 状态读写（`getSocialV2State` / `loadSocialV2State` / `saveSocialV2State`）与
+   唤醒调度（`scheduleWakeV2` / `setupSleepTimerV2` / `sendWakePromptV2` / `scheduleReplyCheckV2`）。
 
 每一步必须满足：`node --check src/bridge.js` 通过、`npm run test:audit` 全绿、
 新增模块有直接单测（不经过 VM 源码注入）。
