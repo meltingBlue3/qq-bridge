@@ -23,9 +23,10 @@
 | --- | --- | --- | --- |
 | `src/route-policy.js` | `authorizeAgentRequest()` + 路由分类函数 | 把「身份 × 路由」矩阵从 `bridge.js` 的 100+ 行嵌套 `if` 收成一张默认拒绝的策略表；管理端点不会再因为漏写一行校验而暴露给会话 agent | `scripts/test-route-policy.mjs`（11 项） |
 | `src/json-file.js` | `readJsonSafe` / `readConfigObject` / `atomicWriteJson` / `atomicWriteText` / `renameWithRetry` | 48 处调用点共享同一套「BOM 容错、配置顶层校验、唯一临时文件、Windows rename 退避」实现，避免各端点各写一份 | `scripts/test-json-file.mjs`（6 项） |
-| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 37/37 |
+| `src/config.js` | `loadConfig()` + `normalizeOwnerQQ` / `normalizeIdList` / `normalizeReasoningEffort` / `applyRoleInjectLimit` | 350 行配置默认值、section 合并、socialV2 深度合并从 `main()` 外移；配置可以脱离桥接进程直接测 | `scripts/test-config.mjs`（5 项） |
+| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 38/38 |
 
-修复后基线：`npm run test:audit` **37/37 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+修复后基线：`npm run test:audit` **38/38 全绿**（修复前为 26/35，含多个因 VM 缺符号而
 超时/误报的脚本）。
 
 ## 仍然存在的设计债（按优先级）
@@ -43,11 +44,11 @@
 每一步必须满足：`node --check src/bridge.js` 通过、`npm run test:audit` 全绿、
 新增模块有直接单测（不经过 VM 源码注入）。
 
-### P1 — 配置默认值仍是手写字面量
+### P1 — `config.example.json` 仍是手写模板
 
-`loadConfig()` 约 350 行，`config.example.json` 另有一份模板；两者靠人工同步。
-下一步把默认值收进 `src/config-defaults.js`，由生成脚本产出 `config.example.json`，
-并加一个配置契约测试（键集合、默认值类型、敏感字段为空）。
+`loadConfig()` 已迁到 `src/config.js`，默认值只剩这一份；但 `config.example.json` 还是
+另一份手写模板，两者靠人工同步。下一步由 `src/config.js` 的默认值生成
+`config.example.json`，并加一个键集合/类型契约测试（敏感字段必须为空）。
 
 ### P1 — 状态文件各自手写加载/保存
 
