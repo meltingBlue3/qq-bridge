@@ -27,9 +27,12 @@
 | `src/http-utils.js` | `SECURITY_HEADERS` / `sendJsonResponse` / `readJsonBody` / `isAllowedHost` / `isAllowedOrigin` | 安全响应头、1MB 请求体读取、Host/Origin 回环校验从每个请求闭包外移；可脱开真实 HTTP server 单测 | `scripts/test-http-utils.mjs`（4 项） |
 | `src/initial-prompts.js` | `createInitialPromptStore()` | 初始提示词的加载/保存/只读降级/上限校验从 `main()` 外移；文件损坏时不覆盖原文件的约束可以单测 | `scripts/test-initial-prompts.mjs`（5 项） |
 | `src/roles.js` | `createRoleStore()` + `sanitizeRoleName` / `validateRoleContent` | 人格卡的列目录、名称/体积校验、读写、注入预警/摘要从 `main()` 外移；注入上限通过 getter 动态读取 | `scripts/test-roles.mjs`（5 项） |
-| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 41/41 |
+| `src/http/role-routes.js` | `handleRoleRoutes()` | `startConsoleServer()` 的人格管理路由组（7 个端点）整块外移；依赖显式传入 | `scripts/test-role-routes.mjs`（5 项） |
+| `src/http/preset-routes.js` | `handlePresetRoutes()` | `startConsoleServer()` 的仿真提示词路由组（读取/保存/备份/还原）整块外移 | `scripts/test-preset-routes.mjs`（4 项） |
+| `src/social-v2/wake-policy.js` | `normalizeSpeakerIdsV2` / `pickWakeTriggersV2` / `defaultWakeConfigV2` / `preSleepWaitBlockedV2` / `computeWakeSafetyV2` / `wakePriorityV2` 等 | reserved2 唤醒策略的纯函数层：默认配置、触发字段过滤、沉睡前观察判定、防永眠、优先级；bridge 只留绑定 `cfg.socialV2.wake` 的薄包装 | `scripts/test-wake-policy.mjs`（8 项） |
+| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` / 路由组 / `wake-policy`（含 import-as 别名）；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 44/44 |
 
-修复后基线：`npm run test:audit` **41/41 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+修复后基线：`npm run test:audit` **44/44 全绿**（修复前为 26/35，含多个因 VM 缺符号而
 超时/误报的脚本）。
 
 ## 仍然存在的设计债（按优先级）

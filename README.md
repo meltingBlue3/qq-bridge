@@ -279,6 +279,8 @@ qq-bridge/
     http-utils.js       # 控制台安全响应头、JSON 请求体读取、Host/Origin 回环校验
     initial-prompts.js  # 会话初始提示词存储（只读降级、上限校验、首次唤醒注入）
     roles.js            # 人格卡文件层（列目录、名称/体积校验、读写、注入预警）
+    http/               # 控制台路由组（role-routes / preset-routes，从 startConsoleServer 拆出）
+    social-v2/          # reserved2 唤醒策略纯函数（wake-policy）
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
     md-to-plain.js      # Markdown → QQ 纯文本
     self-test.js        # DSH 侧自测

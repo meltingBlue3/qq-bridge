@@ -28,6 +28,9 @@ import * as configModule from '../src/config.js';
 import * as httpUtils from '../src/http-utils.js';
 import * as initialPromptsModule from '../src/initial-prompts.js';
 import * as rolesModule from '../src/roles.js';
+import * as roleRoutesModule from '../src/http/role-routes.js';
+import * as presetRoutesModule from '../src/http/preset-routes.js';
+import * as wakePolicyModule from '../src/social-v2/wake-policy.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
@@ -195,7 +198,11 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...wakePolicyModule,
+    // bridge.js 里用了 import as 的别名，VM 里没有 import，必须把别名也补上。
+    createDefaultWakeConfigV2: wakePolicyModule.defaultWakeConfigV2,
+    refreshStoredWakeConfigV2: wakePolicyModule.refreshDefaultWakeConfigV2,
+    checkPreSleepWaitBlocked: wakePolicyModule.preSleepWaitBlockedV2,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,
