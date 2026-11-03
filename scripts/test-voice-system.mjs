@@ -117,8 +117,10 @@ console.log('## 各入口 import 的符号都真实存在');
 
 console.log('## qq-bridge 语音系统：路由与开关');
 {
-  // toolFlags 清单在 src/http/socialv2-admin-routes.js（socialV2 管理路由已外移），两处一起扫。
-  const bridge = read('src/bridge.js') + read(path.join('src', 'http', 'socialv2-admin-routes.js'));
+  // toolFlags 清单在 socialv2-admin-routes.js，语音路由体在 voice-routes.js：三处一起扫。
+  const bridge = read('src/bridge.js')
+    + read(path.join('src', 'http', 'socialv2-admin-routes.js'))
+    + read(path.join('src', 'http', 'voice-routes.js'));
   for (const route of ["'/api/voice/send'", "'/api/send/voice'", "'/api/socialV2/send-voice'", "'/api/voice/list'", "'/api/socialV2/voices'"]) {
     ok(bridge.includes(route), `路由 ${route}`);
   }
@@ -129,9 +131,9 @@ console.log('## qq-bridge 语音系统：路由与开关');
   ok(/shouldBlockSilentReply\(key\)/.test(bridge), 'AI 语音尊重静默模式');
   ok(/allowAbsolutePath/.test(bridge), 'AI 绝对路径受配置约束');
   // 操作者通道不应被 AI 开关挡住（否则默认关闭时你自己也发不了）
-  const opSection = bridge.slice(bridge.indexOf("url.pathname === '/api/voice/send' || url.pathname === '/api/send/voice'"), bridge.indexOf("'/api/socialV2/send-voice'"));
+  const opSection = bridge.slice(bridge.indexOf("url.pathname === '/api/voice/send' || url.pathname === '/api/send/voice'"), bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"));
   ok(!/if \(!voice\.enabled\)/.test(opSection), '操作者通道不被 voice.enabled 挡住（默认关闭时仍可手动试发）');
-  const agentSection = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf("'/api/socialV2/send-sticker'"));
+  const agentSection = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf('  // 语音库列表'));
   ok(/if \(!voice\.enabled\)/.test(agentSection), 'AI 通道受 voice.enabled 挡住');
 }
 

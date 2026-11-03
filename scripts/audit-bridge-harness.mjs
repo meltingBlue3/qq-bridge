@@ -40,6 +40,8 @@ import * as lifecycleRoutesModule from '../src/http/lifecycle-routes.js';
 import * as socialV2AdminRoutesModule from '../src/http/socialv2-admin-routes.js';
 import * as socialV2SessionRoutesModule from '../src/http/socialv2-session-routes.js';
 import * as socialV2SendRoutesModule from '../src/http/socialv2-send-routes.js';
+import * as socialV2StickerRoutesModule from '../src/http/socialv2-sticker-routes.js';
+import * as voiceRoutesModule from '../src/http/voice-routes.js';
 import * as wakePolicyModule from '../src/social-v2/wake-policy.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
@@ -208,7 +210,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...dshRoutesModule, ...accessRoutesModule, ...socialRoutesModule, ...notifyRoutesModule, ...tokenRoutesModule, ...lifecycleRoutesModule, ...socialV2AdminRoutesModule, ...socialV2SessionRoutesModule, ...socialV2SendRoutesModule, ...wakePolicyModule,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...dshRoutesModule, ...accessRoutesModule, ...socialRoutesModule, ...notifyRoutesModule, ...tokenRoutesModule, ...lifecycleRoutesModule, ...socialV2AdminRoutesModule, ...socialV2SessionRoutesModule, ...socialV2SendRoutesModule, ...socialV2StickerRoutesModule, ...voiceRoutesModule, ...wakePolicyModule,
     // bridge.js 里用了 import as 的别名，VM 里没有 import，必须把别名也补上。
     createDefaultWakeConfigV2: wakePolicyModule.defaultWakeConfigV2,
     refreshStoredWakeConfigV2: wakePolicyModule.refreshDefaultWakeConfigV2,

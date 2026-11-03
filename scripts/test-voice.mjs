@@ -152,7 +152,9 @@ console.log('## MCP 工具与 bridge 路由');
   ok(voiceBlock.includes('/api/socialV2/send-voice'), 'qq_send_voice 调 /api/socialV2/send-voice');
   ok(!voiceBlock.includes("绝对路径的音频"), 'qq_send_voice 不暴露绝对路径参数');
 
-  const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
+  // 语音路由已外移到 src/http/voice-routes.js；bridge.js 保留实现函数，两处一起扫。
+  const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8')
+    + fs.readFileSync(path.join(ROOT, 'src', 'http', 'voice-routes.js'), 'utf8');
   for (const s of [
     '/api/voice/send', '/api/socialV2/send-voice', '/api/socialV2/voices',
     'sendVoiceV2', 'sendVoiceForV2', 'resolveVoicePathForV2', 'resolveVoicePathForOperator',
@@ -166,11 +168,13 @@ console.log('## MCP 工具与 bridge 路由');
 
 console.log('## 安全边界（AI 通道来源限制）');
 {
-  const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
+  // 语音路由已外移到 src/http/voice-routes.js：实现函数在 bridge.js，路由体在 voice-routes.js。
+  const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8')
+    + fs.readFileSync(path.join(ROOT, 'src', 'http', 'voice-routes.js'), 'utf8');
   const fn = bridge.slice(bridge.indexOf('function resolveVoicePathForV2'), bridge.indexOf('function resolveVoicePathForOperator'));
   ok(/base64:|data:|https\?:/.test(fn), 'AI 通道拒绝 base64/data/http 来源');
   ok(/allowAbsolutePath/.test(fn), 'AI 通道检查 allowAbsolutePath');
-  const sendRoute = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf("url.pathname === '/api/socialV2/send-sticker'"));
+  const sendRoute = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf('  // 语音库列表'));
   ok(sendRoute.includes('v2SessionAllowed(key)'), '语音发送校验会话白名单');
   ok(sendRoute.includes('agentTokenOk(key, token)'), '语音发送校验 agent token');
   ok(sendRoute.includes('shouldBlockSilentReply(key)'), '语音发送尊重静默模式');
@@ -306,7 +310,8 @@ console.log('## 回归：AI 通道的语音库响应不许带出绝对路径（P
   // 由来：/api/socialV2/voices 的 dir 字段做了 agentCall ? undefined 抑制，
   // 但紧邻的 hint 模板字符串仍然无条件插值 ${voice.dir} —— 绝对路径又从旁边漏给模型了。
   // 这类"字段堵了、文案没堵"的漏法静态查最有效：AI 通道的所有响应字段与文案都不该含盘符/家目录。
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
+  // voices 路由体已外移到 src/http/voice-routes.js。
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'http', 'voice-routes.js'), 'utf8');
   const at = src.indexOf("url.pathname === '/api/socialV2/voices'");
   ok(at > 0, '找到 voices 路由');
   const section = src.slice(at, at + 3200);
