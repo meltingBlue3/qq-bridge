@@ -30,6 +30,7 @@ import * as initialPromptsModule from '../src/initial-prompts.js';
 import * as rolesModule from '../src/roles.js';
 import * as roleRoutesModule from '../src/http/role-routes.js';
 import * as presetRoutesModule from '../src/http/preset-routes.js';
+import * as securityRoutesModule from '../src/http/security-routes.js';
 import * as wakePolicyModule from '../src/social-v2/wake-policy.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
@@ -198,7 +199,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...wakePolicyModule,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...wakePolicyModule,
     // bridge.js 里用了 import as 的别名，VM 里没有 import，必须把别名也补上。
     createDefaultWakeConfigV2: wakePolicyModule.defaultWakeConfigV2,
     refreshStoredWakeConfigV2: wakePolicyModule.refreshDefaultWakeConfigV2,

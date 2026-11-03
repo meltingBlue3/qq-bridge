@@ -23,6 +23,7 @@ import { createInitialPromptStore } from './initial-prompts.js';
 import { createRoleStore, ROLE_CONTENT_MAX_BYTES, ROLE_NAME_MAX, sanitizeRoleName } from './roles.js';
 import { handleRoleRoutes } from './http/role-routes.js';
 import { handlePresetRoutes } from './http/preset-routes.js';
+import { handleSecurityRoutes } from './http/security-routes.js';
 import {
   computeWakeSafetyV2,
   defaultWakeConfigV2 as createDefaultWakeConfigV2,
@@ -2644,6 +2645,17 @@ async function main() {
       listPresetBackups,
       log
     };
+    const securityRouteDeps = {
+      cfg,
+      stateDir: STATE_DIR,
+      getStateDirHardened: () => stateDirHardened,
+      setStateDirHardened: (value) => { stateDirHardened = value; },
+      hardenStateDirAcl,
+      getConsoleToken: () => consoleToken,
+      setConsoleToken: (value) => { consoleToken = value; },
+      root: ROOT,
+      log
+    };
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -3264,77 +3276,9 @@ async function main() {
           return;
         }
 
-        // ── 安全拦截通知设置 ─────────────────────────────────────────────────
-        if (req.method === 'GET' && url.pathname === '/api/security') {
-          sendJson({
-            security: cfg.security ?? { interceptNotify: true },
-            // state/ 的 ACL 收紧结果：Windows 上改 ACL 需要管理员权限，未提权时会失败。
-            // 控制台据此显示警告与可复制的命令（而不是让用户以为已经安全）。
-            // 命令必须取自 state-acl 的**安全**版本：把 (OI)(CI) 授权和 /T 混在一句里
-            // 会把子文件 DACL 清空，用户照抄就会把自己的 state/ 弄坏。
-            stateDir: {
-              hardened: stateDirHardened,
-              path: STATE_DIR,
-              manualCommand: process.platform === 'win32'
-                ? manualDirCommand(STATE_DIR)
-                : `chmod 700 "${STATE_DIR}"`
-            }
-          });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/security') {
-          const body = await readBody();
-          // 支持从控制台**重试**收紧 state/ 权限（用户在管理员终端里配好了权限/换了启动方式后）。
-          if (body.rehardenStateDir === true) {
-            stateDirHardened = null;
-            hardenStateDirAcl();
-            sendJson({ ok: stateDirHardened === true, hardened: stateDirHardened, path: STATE_DIR });
-            return;
-          }
-          const configFile = path.join(ROOT, 'config.json');
-          const file = readConfigObject(configFile);
-          const next = { ...(file.security ?? {}), ...body };
-          if (typeof next.interceptNotify === 'boolean') next.interceptNotify = next.interceptNotify;
-          else if (next.interceptNotify !== undefined) next.interceptNotify = Boolean(next.interceptNotify);
-          file.security = next;
-          atomicWriteJson(configFile, file);
-          cfg.security = { ...(cfg.security ?? {}), ...next };
-          log(`控制台：安全拦截通知已更新（interceptNotify=${cfg.security.interceptNotify}）`);
-          sendJson({ ok: true, security: cfg.security });
-          return;
-        }
-        // ── 控制台访问令牌（可手动修改/生成随机） ─────────────────────────────
-        if (req.method === 'POST' && url.pathname === '/api/console/token') {
-          const body = await readBody();
-          let newToken = String(body.token ?? '').trim();
-          const generated = !newToken;
-          if (generated) {
-            newToken = crypto.randomBytes(24).toString('hex');
-          }
-          if (newToken.length < 16) {
-            sendJson({ ok: false, error: '控制台访问令牌至少需要 16 位；留空可生成随机令牌' }, 400);
-            return;
-          }
-          if (newToken.length > 128) {
-            sendJson({ ok: false, error: '控制台访问令牌不能超过 128 位' }, 400);
-            return;
-          }
-          if (!/^[A-Za-z0-9_-]+$/.test(newToken)) {
-            sendJson({ ok: false, error: '控制台访问令牌只能包含字母、数字、下划线或短横线' }, 400);
-            return;
-          }
-          const configFile = path.join(ROOT, 'config.json');
-          const file = readConfigObject(configFile);
-          // 手动令牌写入 config.json（用户可见、可再改）；随机令牌写入 state/console-token 并清空 config 中的手动值。
-          file.consoleToken = generated ? '' : newToken;
-          atomicWriteJson(configFile, file);
-          cfg.consoleToken = generated ? '' : newToken;
-          atomicWriteText(path.join(STATE_DIR, 'console-token'), newToken);
-          consoleToken = newToken;
-          log(`控制台：访问令牌已${generated ? '重新生成' : '手动修改'}（不记录完整值）`);
-          sendJson({ ok: true, token: newToken, generated });
-          return;
-        }
+        // ── 安全拦截通知 / 控制台令牌（路由体在 src/http/security-routes.js）──
+        if (await handleSecurityRoutes({ req, url, sendJson, readBody, deps: securityRouteDeps })) return;
+
         // ── 测试发送消息（强制走白名单校验） ───────────────────────────────────
         if (req.method === 'POST' && url.pathname === '/api/test-send') {
           const body = await readBody();
