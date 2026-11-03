@@ -27,6 +27,8 @@ import { handleSecurityRoutes } from './http/security-routes.js';
 import { handleDshRoutes } from './http/dsh-routes.js';
 import { handleAccessRoutes } from './http/access-routes.js';
 import { handleSocialRoutes } from './http/social-routes.js';
+import { handleNotifyRoutes } from './http/notify-routes.js';
+import { handleTokenRoutes } from './http/token-routes.js';
 import {
   computeWakeSafetyV2,
   defaultWakeConfigV2 as createDefaultWakeConfigV2,
@@ -2691,6 +2693,26 @@ async function main() {
       flushSummaries,
       log
     };
+    const notifyRouteDeps = {
+      cfg,
+      state,
+      modeAllowed,
+      getCurrentMode: () => currentMode,
+      allowed,
+      isDshReady: () => dshReady,
+      readRoleState,
+      getSocialV2State,
+      ensureSession,
+      social,
+      deliverPrompt,
+      appendActivity,
+      log
+    };
+    const tokenRouteDeps = {
+      tokenLedger,
+      getPriceSymbol: () => priceTable.symbol,
+      log
+    };
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -3216,75 +3238,9 @@ async function main() {
         if (await handleSocialRoutes({ req, url, sendJson, readBody, deps: socialRouteDeps })) return;
 
         // ── 后台控制端引导：向指定会话的 DSH agent 投递提醒 ──────────────────
-        if (req.method === 'POST' && url.pathname === '/api/console/notify-ai') {
-          const body = await readBody();
-          const key = String(body.key ?? '').trim();
-          const message = String(body.message ?? '').trim();
-          if (!key || !message) {
-            sendJson({ ok: false, error: 'key 和 message 不能为空' }, 400);
-            return;
-          }
-          const keyMatch = /^(group|private):(\d+)$/.exec(key);
-          if (!keyMatch) {
-            sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400);
-            return;
-          }
-          const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0) {
-            sendJson({ ok: false, error: 'id 无效' }, 400);
-            return;
-          }
-          if (!modeAllowed(key, kind, id, cfg, currentMode)) {
-            sendJson({ ok: false, error: `该会话不在当前模式（${currentMode}）允许范围内` }, 403);
-            return;
-          }
-          if (!state.sessions[key] && !allowed(kind, id, cfg)) {
-            sendJson({ ok: false, error: '该会话不在白名单内，且尚未创建' }, 403);
-            return;
-          }
-          if (!dshReady) {
-            sendJson({ ok: false, error: 'DSH 当前不可用，请稍后再试' }, 503);
-            return;
-          }
-          const isV2 = currentMode === 'reserved2';
-          const roleState = readRoleState();
-          const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
-          // 二代必须带会话令牌，否则 AI 调用任何 MCP 状态/发送工具都会被拒。
-          let tokenLine = '';
-          if (isV2) {
-            const stV2 = getSocialV2State(key);
-            tokenLine = `【会话令牌】${stV2.agentToken}（调用二代状态/发送工具时请在参数中带上此令牌）\n\n`;
-          }
-          const promptText = `${roleLine}${tokenLine}【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
-          let sessionId = null;
-          let popSilent = null;
-          try {
-            sessionId = await ensureSession(key);
-            const silentId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-            const arr = social.silentTurns.get(sessionId) ?? [];
-            social.silentTurns.set(sessionId, [...arr, { id: silentId, ts: Date.now() }]);
-            popSilent = () => {
-              const list = social.silentTurns.get(sessionId) ?? [];
-              const next = list.filter((x) => x.id !== silentId);
-              if (next.length > 0) social.silentTurns.set(sessionId, next);
-              else social.silentTurns.delete(sessionId);
-            };
-            const result = await deliverPrompt(key, promptText, { silent: true });
-            if (result.ok) {
-              log(`控制台：已向 ${key} 的 DSH 发送后台提醒`);
-              appendActivity(`${key} 控制台后台提醒：${message.slice(0, 80)}`);
-              sendJson({ ok: true, key, sessionId });
-            } else {
-              popSilent();
-              sendJson({ ok: false, error: result.error || '投递失败' }, 500);
-            }
-          } catch (error) {
-            if (popSilent) popSilent();
-            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
-          }
-          return;
-        }
+        // ── 后台控制端引导（路由体在 src/http/notify-routes.js）────────────────
+        if (await handleNotifyRoutes({ req, url, sendJson, readBody, deps: notifyRouteDeps })) return;
+
         // ── 二代仿真模式（reserved2）内部 Agent API ─────────────────────────
         if (req.method === 'GET' && url.pathname === '/api/socialV2/config') {
           sendJson({ ok: true, config: cfg.socialV2 ?? {} });
@@ -5173,44 +5129,9 @@ async function main() {
           return;
         }
         // ── Token 用量 / 花费（控制台专用） ──────────────────────────────────
-        // 路径刻意不放在 /api/socialV2/ 下：那一整个前缀对持有 x-agent-token 的
-        // QQ 侧 AI 是放行的（见上方 agentAllowed 白名单），而跨群花费属于管理信息，
-        // 不应让某个群里的 AI 读到别的群烧了多少钱。这里再显式拒绝一次做双保险。
-        if (url.pathname === '/api/tokens/summary' || url.pathname.startsWith('/api/tokens/')) {
-          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
-          if (req.method === 'GET' && url.pathname === '/api/tokens/summary') {
-            const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-            sendJson({ ...tokenLedger.summary({ limit }), ledger: tokenLedger.stats() });
-            return;
-          }
-          if (req.method === 'GET' && url.pathname === '/api/tokens/series') {
-            const hours = Math.min(24 * 90, Math.max(1, Number(url.searchParams.get('hours')) || 24));
-            const maxBuckets = Math.min(120, Math.max(6, Number(url.searchParams.get('buckets')) || 48));
-            sendJson(tokenLedger.series({ hours, maxBuckets }));
-            return;
-          }
-          if (req.method === 'GET' && url.pathname === '/api/tokens/turns') {
-            const key = String(url.searchParams.get('key') ?? '').trim();
-            const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-            const detail = tokenLedger.conversation(key, { turnLimit: limit });
-            if (!detail) { sendJson({ ok: false, error: '未找到该会话的用量记录' }, 404); return; }
-            sendJson(detail);
-            return;
-          }
-          if (req.method === 'GET' && url.pathname === '/api/tokens/recent') {
-            const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 50));
-            sendJson({ ok: true, symbol: priceTable.symbol, entries: tokenLedger.recent(limit) });
-            return;
-          }
-          if (req.method === 'POST' && url.pathname === '/api/tokens/reset') {
-            tokenLedger.reset();
-            log('控制台：token 用量账本已重置');
-            sendJson({ ok: true });
-            return;
-          }
-          sendJson({ ok: false, error: 'not found' }, 404);
-          return;
-        }
+        // ── 令牌与花费（路由体在 src/http/token-routes.js）────────────────────
+        if (await handleTokenRoutes({ req, url, sendJson, deps: tokenRouteDeps })) return;
+
         // ── 工具调用日志 ─────────────────────────────────────────────────────
         if (req.method === 'GET' && url.pathname === '/api/socialV2/tool-log') {
           const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
