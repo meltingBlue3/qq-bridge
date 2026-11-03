@@ -18,7 +18,7 @@ import { buildInboundMessageBlock, buildMessageEnvelope, buildMessageList, neutr
 import { authorizeAgentRequest } from './route-policy.js';
 import { atomicWriteJson, atomicWriteText, readConfigObject, readJsonSafe } from './json-file.js';
 import { applyRoleInjectLimit, loadConfig, normalizeIdList, normalizeOwnerQQ, normalizeReasoningEffort, REASONING_EFFORT_DEFAULT, REASONING_EFFORT_OPTIONS, ROLE_INJECT_MAX_CHARS_DEFAULT } from './config.js';
-import { isAllowedHost, isAllowedOrigin, readJsonBody, SECURITY_HEADERS, sendJsonResponse } from './http-utils.js';
+import { isAllowedHost, isAllowedOrigin, readJsonBody, SECURITY_HEADERS, sendJsonResponse, unquoteJsonString } from './http-utils.js';
 import { createInitialPromptStore } from './initial-prompts.js';
 import { createRoleStore, ROLE_CONTENT_MAX_BYTES, ROLE_NAME_MAX, sanitizeRoleName } from './roles.js';
 import { handleRoleRoutes } from './http/role-routes.js';
@@ -39,6 +39,8 @@ import { handleWaitRoute } from './http/socialv2-wait-route.js';
 import { handleMemoryRoutes } from './http/memory-routes.js';
 import { handleSocialV2MiscRoutes } from './http/socialv2-misc-routes.js';
 import { handleSocialV2ReadRoutes } from './http/socialv2-read-routes.js';
+import { handleSlangRoutes } from './http/slang-routes.js';
+import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
   defaultWakeConfigV2 as createDefaultWakeConfigV2,
@@ -439,19 +441,6 @@ function redactSensitiveText(text) {
 // 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。
 function escapeCqText(text) {
   return String(text ?? '').replace(/\[CQ:/gi, '[CQ：');
-}
-
-// 兼容模型把单条消息序列化成 JSON 字符串的情况，例如 "\"你好\"" → "你好"。
-function unquoteJsonString(value) {
-  if (typeof value !== 'string') return value;
-  const t = value.trim();
-  if (t.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(t);
-      if (typeof parsed === 'string') return parsed;
-    } catch {}
-  }
-  return value;
 }
 
 // QQ 活动日志：每次收发都追加一行，供 WebUI 侧 agent 汇报 QQ 动态。
@@ -3001,6 +2990,46 @@ async function main() {
       formatForwardResponse,
       truncateText
     };
+    const slangRouteDeps = {
+      cfg,
+      log,
+      agentTokenOk,
+      v2SessionAllowed,
+      v2ToolEnabled,
+      confirmedSlangListV2,
+      // slangEntries 是外层 let 且会被整体重赋值（loadSlang / 控制台清空），
+      // 必须以 getter 注入，避免路由拿到被替换前的孤儿数组。
+      getSlangEntries: () => slangEntries,
+      buildSlangContext,
+      redactKnownTokensOnly,
+      allowSlangSubmit,
+      saveSlangStore,
+      queueSlangTask,
+      runSlangResearch,
+      createSlangEntry,
+      publicSlangEntry,
+      mergeEvidence,
+      appendActivity
+    };
+    const sendRouteDeps = {
+      cfg,
+      log,
+      agentTokenOk,
+      v2ToolEnabled,
+      getCurrentMode: () => currentMode,
+      modeAllowed,
+      socialV2,
+      getSocialV2State,
+      saveSocialV2State,
+      findMessageMedia,
+      fetchMediaData,
+      shouldBlockSilentReply,
+      resolveReplyTargetV2,
+      sendMessagesV2,
+      recordSentMessagesV2,
+      scheduleReplyCheckV2,
+      appendActivity
+    };
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -3607,270 +3636,10 @@ async function main() {
         // ── 轻量记忆（路由体在 src/http/memory-routes.js）────────────────────
         if (await handleMemoryRoutes({ req, url, sendJson, readBody, deps: memoryRouteDeps })) return;
 
-        // ── 二代黑话学习（reserved2）：AI 查询/提交黑话候选 ─────────────────
-        if (req.method === 'GET' && url.pathname === '/api/socialV2/slang/query') {
-          const key = String(url.searchParams.get('key') ?? '').trim();
-          const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();
-          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2ToolEnabled('slangQuery')) { sendJson({ ok: false, error: '工具未启用：qq_slang_query' }, 403); return; }
-          const list = confirmedSlangListV2().filter((e) => {
-            if (!q) return true;
-            return e.content.toLowerCase().includes(q)
-              || e.meaning.toLowerCase().includes(q)
-              || e.usage.toLowerCase().includes(q)
-              || e.example.toLowerCase().includes(q);
-          });
-          sendJson({
-            ok: true,
-            key,
-            total: list.length,
-            entries: list,
-            block: buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8)
-          });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/socialV2/slang/submit') {
-          const body = await readBody();
-          const key = String(body.key ?? '').trim();
-          const token = String(body.token ?? '').trim();
-          const content = redactKnownTokensOnly(String(body.content ?? '')).trim();
-          const context = redactKnownTokensOnly(String(body.context ?? '')).trim();
-          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
-          if (req.headers['x-agent-token'] && !v2ToolEnabled('slangSubmit')) { sendJson({ ok: false, error: '工具未启用：qq_slang_submit' }, 403); return; }
-          if (cfg.slang?.enabled === false) { sendJson({ ok: false, error: '黑话学习已关闭（slang.enabled=false）' }, 403); return; }
-          if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return; }
-          if (content.length > 50) { sendJson({ ok: false, error: '黑话词条过长（最多 50 字）' }, 400); return; }
-          if (!allowSlangSubmit(key)) { sendJson({ ok: false, error: '黑话提交过于频繁，请稍后再试' }, 429); return; }
-          const existing = slangEntries.find((e) => e.content === content);
-          if (existing) {
-            if (existing.status === SLANG_STATUS.CONFIRMED) {
-              sendJson({ ok: true, duplicate: true, status: 'confirmed', entry: publicSlangEntry(existing) });
-              return;
-            }
-            if (existing.status === SLANG_STATUS.REJECTED) {
-              sendJson({ ok: false, error: '该词已被管理员拒绝，如需重新收录请联系管理员' }, 403);
-              return;
-            }
-            // candidate：累计出现次数并追加语境证据
-            existing.count = (Number(existing.count) || 0) + 1;
-            if (context) {
-              existing.evidence = mergeEvidence(existing.evidence, [{ key, sender: 'AI提交', text: context.slice(0, 200), time: Date.now() }]);
-            }
-            existing.updatedAt = new Date().toISOString();
-            saveSlangStore();
-            if (cfg.slang?.autoResearch !== false) {
-              const thresholds = Array.isArray(cfg.slang?.inferenceThresholds) ? cfg.slang.inferenceThresholds.map(Number).filter(Boolean) : [2, 4, 8];
-              if (thresholds.includes(existing.count) && existing.count > (Number(existing.lastInferenceCount) || 0)) {
-                queueSlangTask(() => runSlangResearch([existing]));
-              }
-            }
-            log(`[reserved2] AI 再次提交黑话候选「${content}」(${key})，累计 ${existing.count} 次`);
-            sendJson({ ok: true, duplicate: true, status: 'candidate', entry: publicSlangEntry(existing) });
-            return;
-          }
-          const entry = createSlangEntry({
-            content,
-            source: 'ai',
-            status: SLANG_STATUS.CANDIDATE,
-            evidence: context ? [{ key, sender: 'AI提交', text: context.slice(0, 200), time: Date.now() }] : []
-          });
-          slangEntries.push(entry);
-          saveSlangStore();
-          if (cfg.slang?.autoResearch !== false) {
-            queueSlangTask(() => runSlangResearch([entry]));
-          }
-          log(`[reserved2] AI 提交黑话候选「${content}」(${key})`);
-          appendActivity(`${key} [reserved2] AI 提交黑话候选：${content}${context ? '（附语境）' : ''}`);
-          sendJson({ ok: true, entry: publicSlangEntry(entry) });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/authorize/read') {
-          const body = await readBody();
-          const key = String(body.key ?? '').trim();
-          const token = String(body.token ?? '').trim();
-          const keyMatch = /^(group|private):(\d+)$/.exec(key);
-          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
-          if (!token || !agentTokenOk(key, token)) {
-            // 空 token 一律拒绝：该端点对 agent 流量开放（见 startConsoleServer 里的
-            // agent 白名单），而 MCP 的 agentApi 总是带着真实控制台令牌，
-            // 所以「不传 token 就跳过校验」等于把它变成免鉴权端点。
-            sendJson({ ok: false, error: token ? 'agent token 无效' : '缺少会话令牌；旧只读工具在需要令牌的模式下不可用，请改用带会话令牌的 v2 读工具' }, 403);
-            return;
-          }
-          const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
-            sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
-            return;
-          }
-          sendJson({ ok: true, key });
-          return;
-        }
-        // ── 图片/表情查询端点（MCP qq_get_message_images 走这里） ────────────
-        if (req.method === 'GET' && url.pathname === '/api/images/message') {
-          const key = String(url.searchParams.get('key') ?? '').trim();
-          const messageId = String(url.searchParams.get('messageId') ?? '').trim();
-          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
-          const keyMatch = /^(group|private):(\d+)$/.exec(key);
-          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
-          if (!messageId) { sendJson({ ok: false, error: 'messageId 不能为空' }, 400); return; }
-          if (currentMode === 'reserved2' && !agentToken) {
-            sendJson({ ok: false, error: 'reserved2 模式读取图片必须携带 agent token' }, 403);
-            return;
-          }
-          if (currentMode === 'chat' || currentMode === 'reserved') {
-            sendJson({ ok: false, error: '一代 chat/reserved 模式图片已自动内联，按需图片工具仅 reserved2 模式可用' }, 403);
-            return;
-          }
-          if (agentToken && !agentTokenOk(key, agentToken)) {
-            sendJson({ ok: false, error: 'agent token 无效' }, 403);
-            return;
-          }
-          const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
-            sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
-            return;
-          }
-          if (agentToken && !v2ToolEnabled('getImages')) {
-            sendJson({ ok: false, error: '工具未启用：qq_get_message_images' }, 403);
-            return;
-          }
-          if (!agentToken && currentMode === 'closed-agent' && !v2ToolEnabled('getImages')) {
-            sendJson({ ok: false, error: '工具未启用：qq_get_message_images' }, 403);
-            return;
-          }
-          const media = findMessageMedia(key, messageId);
-          if (!media.length) {
-            sendJson({ ok: true, messageId, media: [], images: [], note: '该消息没有可读取的图片/表情元数据' });
-            return;
-          }
-          try {
-            const images = await fetchMediaData(media);
-            sendJson({ ok: true, messageId, media, images });
-          } catch (error) {
-            log(`图片查询失败 ${key} ${messageId}: ${error?.message ?? error}`);
-            sendJson({ ok: false, error: `图片查询失败：${error?.message ?? error}` }, 500);
-          }
-          return;
-        }
-
-        // ── 统一发送端点（MCP 旧发送工具也走这里） ───────────────────────────
-        if (req.method === 'POST' && (url.pathname === '/api/send/group' || url.pathname === '/api/send/private' || url.pathname === '/api/send/reply')) {
-          const body = await readBody();
-          const token = String(body.token ?? '').trim();
-          const isPrivate = url.pathname === '/api/send/private';
-          const isReply = url.pathname === '/api/send/reply';
-          const targetId = isPrivate ? String(body.userId ?? '').trim() : String(body.groupId ?? '').trim();
-          const message = unquoteJsonString(String(body.message ?? '').trim());
-          // 引用 id 与端点无关：/api/send/reply 与另两个端点都允许带（是否真的引用由下游按 id 判断）。
-          // 旧写法 `isReply ? body.replyToMessageId : body.replyToMessageId` 两个分支一模一样，
-          // 保留 isReply 变量只是为了下面的端点语义判断，别再让人以为这里有过分支逻辑。
-          const replyToMessageId = body.replyToMessageId;
-          const atUserId = body.atUserId ?? null;
-          const key = isPrivate ? `private:${targetId}` : `group:${targetId}`;
-          // 安全边界：发送工具只允许在 closed-agent（管理员私聊）或 reserved2（二代 AI 带会话令牌）下使用；
-          // chat/reserved 的自动转发已覆盖正常回复，MCP 发送工具不应成为 prompt injection 的越权出口。
-          if (currentMode === 'chat' || currentMode === 'reserved') {
-            sendJson({ ok: false, error: '发送工具仅限 closed-agent / reserved2 模式使用' }, 403);
-            return;
-          }
-          if (socialV2.paused && token) {
-            sendJson({ ok: false, error: 'AI 已暂停，当前不允许执行发送工具' }, 403);
-            return;
-          }
-          if (!targetId || !message) { sendJson({ ok: false, error: '目标 id 和 message 不能为空' }, 400); return; }
-          if (isPrivate && atUserId) { sendJson({ ok: false, error: '私聊不需要 @' }, 400); return; }
-          if (isReply && (replyToMessageId === undefined || replyToMessageId === null || String(replyToMessageId).trim() === '')) {
-            sendJson({ ok: false, error: 'replyToMessageId 不能为空' }, 400);
-            return;
-          }
-          if (currentMode === 'reserved2' && !token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
-          if (token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          const flag = isPrivate ? 'sendPrivate' : (isReply ? 'reply' : 'sendGroup');
-          if (token && !v2ToolEnabled(flag)) { sendJson({ ok: false, error: `工具未启用：${flag}` }, 403); return; }
-          if (shouldBlockSilentReply(key)) {
-            sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403);
-            return;
-          }
-          const keyMatch = /^(group|private):(\d+)$/.exec(key);
-          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式无效' }, 400); return; }
-          const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
-            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
-            return;
-          }
-          if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '' && !/^-?[1-9]\d*$/.test(String(replyToMessageId).trim())) {
-            sendJson({ ok: false, error: 'replyToMessageId 必须是非零整数（消息 id 可能为负数）' }, 400);
-            return;
-          }
-          let quotedInfo = null;
-          let actualReplyToMessageId = replyToMessageId;
-          if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
-            const stForReply = getSocialV2State(key);
-            const resolved = await resolveReplyTargetV2(stForReply, kind, id, String(replyToMessageId).trim());
-            if (!resolved) {
-              sendJson({ ok: false, error: '无法解析被引用消息，请确认 message id 正确且属于当前会话（可用 qq_get_message_detail 查看）' }, 400);
-              return;
-            }
-            quotedInfo = resolved.info;
-            actualReplyToMessageId = resolved.messageId;
-          }
-          const sendCfg = cfg.socialV2?.send ?? {};
-          const maxChars = Math.max(1, Number(sendCfg.maxMessageChars) || 500);
-          if (message.length > maxChars) { sendJson({ ok: false, error: `单条消息不能超过 ${maxChars} 字` }, 400); return; }
-          if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
-          // st/now 必须声明在 try **之外**：下面的 catch 要用它们回滚预占的发送额度。
-          // 写在 try 里时 catch 拿到的是块作用域外的名字 ⇒ ReferenceError（send-burst
-          // 曾整段踩过同型问题，见体检报告 #1 / R2）。后果不是"少一行日志"，而是
-          // 失败响应变成「st is not defined」、额度不回滚（接下来一分钟全是假 429），
-          // 且部分成功的已发消息不会被记进 recentMessages。
-          const st = getSocialV2State(key);
-          const now = Date.now();
-          try {
-            const maxPerMinute = Number(sendCfg.maxSendPerMinute) || 0;
-            const maxPerHour = Number(sendCfg.maxSendPerHour) || 0;
-            const recentMinute = (st.sendTimes || []).filter((t) => now - t < 60000).length;
-            const recentHour = (st.sendTimes || []).filter((t) => now - t < 3600000).length;
-            if ((maxPerMinute > 0 && recentMinute + 1 > maxPerMinute) || (maxPerHour > 0 && recentHour + 1 > maxPerHour)) {
-              sendJson({ ok: false, error: '发送频率超限，请稍后再试' }, 429);
-              return;
-            }
-            st.sendTimes.push(now);
-            if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
-            const sentMessages = await sendMessagesV2(key, [message], [], actualReplyToMessageId, atUserId);
-            recordSentMessagesV2(key, sentMessages);
-            st.lastAiReplyAt = now;
-            st.lastActionAt = now;
-            st.wakeConfig.noActionCount = 0;
-            saveSocialV2State();
-            log(`[send] ${url.pathname} ${key}: 成功 ${sentMessages.length}/1 条`);
-            appendActivity(`${key} [send] 成功 ${sentMessages.length}/1 条：${message.slice(0, 80)}`);
-            if (sentMessages.length > 0) scheduleReplyCheckV2(key);
-            sendJson({ ok: true, key, sent: sentMessages.length, failed: sentMessages.length ? 0 : 1, quoted: quotedInfo });
-          } catch (error) {
-            if (error?.sent?.length) {
-              recordSentMessagesV2(key, error.sent);
-              log(`[send] ${url.pathname} ${key} 部分成功 ${error.sent.length}/1 条，已记录已发消息`);
-            }
-            // 失败/未发出的消息回滚预占的发送额度，避免假 429。
-            const sentCount = Array.isArray(error?.sent) ? error.sent.length : 0;
-            const failedCount = Math.max(0, 1 - sentCount);
-            for (let i = 0; i < failedCount; i++) {
-              const idx = st.sendTimes.indexOf(now);
-              if (idx >= 0) st.sendTimes.splice(idx, 1);
-            }
-            if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
-            saveSocialV2State();
-            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
-          }
-          return;
-        }
+        // ── 黑话学习（路由体在 src/http/slang-routes.js）────────────────────
+        if (await handleSlangRoutes({ req, url, sendJson, readBody, deps: slangRouteDeps })) return;
+        // ── 统一发送 / 授权 / 图片（路由体在 src/http/send-routes.js）─────────
+        if (await handleSendRoutes({ req, url, sendJson, readBody, deps: sendRouteDeps })) return;
         // ── 会话生命周期（路由体在 src/http/lifecycle-routes.js）──────────────
         if (await handleLifecycleRoutes({ req, url, sendJson, readBody, deps: lifecycleRouteDeps })) return;
 

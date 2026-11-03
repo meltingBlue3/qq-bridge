@@ -7,7 +7,8 @@ import {
   isAllowedHost,
   isAllowedOrigin,
   readJsonBody,
-  sendJsonResponse
+  sendJsonResponse,
+  unquoteJsonString
 } from '../src/http-utils.js';
 
 function fakeRequest(headers = {}) {
@@ -85,4 +86,14 @@ test('sendJsonResponse：统一 2 空格 JSON 与安全响应头', () => {
   assert.match(calls[0].headers['content-type'], /application\/json/);
   assert.equal(calls[0].headers['X-Frame-Options'], 'DENY');
   assert.equal(calls[1].body, '{\n  "ok": true,\n  "n": 1\n}');
+});
+
+test('unquoteJsonString：模型把消息序列化成 JSON 字符串时还原；非法/普通文本原样返回', () => {
+  assert.equal(unquoteJsonString('"你好"'), '你好');
+  assert.equal(unquoteJsonString('  \\"带引号\\"  '.replace(/\\"/g, '"')), '带引号');
+  assert.equal(unquoteJsonString('普通文本'), '普通文本');
+  assert.equal(unquoteJsonString('"未闭合'), '"未闭合', 'JSON.parse 失败原样返回');
+  assert.equal(unquoteJsonString('"123"'), '123');
+  assert.equal(unquoteJsonString('{"a":1}'), '{"a":1}', '解析出对象不是字符串 → 原样返回');
+  assert.equal(unquoteJsonString(null), null);
 });

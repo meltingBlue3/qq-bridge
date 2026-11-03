@@ -98,3 +98,16 @@ export function readJsonBody(req, { maxBytes = 1_000_000, timeoutMs = 30000 } = 
     req.on('aborted', () => fail(400, '请求体读取中断'));
   });
 }
+
+// 兼容模型把单条消息序列化成 JSON 字符串的情况，例如 "\"你好\"" → "你好"。
+export function unquoteJsonString(value) {
+  if (typeof value !== 'string') return value;
+  const t = value.trim();
+  if (t.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(t);
+      if (typeof parsed === 'string') return parsed;
+    } catch {}
+  }
+  return value;
+}
