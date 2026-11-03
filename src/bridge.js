@@ -25,6 +25,7 @@ import { handleRoleRoutes } from './http/role-routes.js';
 import { handlePresetRoutes } from './http/preset-routes.js';
 import { handleSecurityRoutes } from './http/security-routes.js';
 import { handleDshRoutes } from './http/dsh-routes.js';
+import { handleAccessRoutes } from './http/access-routes.js';
 import {
   computeWakeSafetyV2,
   defaultWakeConfigV2 as createDefaultWakeConfigV2,
@@ -2668,6 +2669,18 @@ async function main() {
       root: ROOT,
       log
     };
+    const accessRouteDeps = {
+      cfg,
+      root: ROOT,
+      reconcileSessionPolicies,
+      allowed,
+      modeAllowed,
+      getCurrentMode: () => currentMode,
+      redactKnownTokensOnly,
+      escapeCqText,
+      bot,
+      log
+    };
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -3180,77 +3193,15 @@ async function main() {
           sendJson({ pending: list });
           return;
         }
-        // ── 白名单可视化编辑（写 config.json + 热更新内存） ───────────────────
-        if (req.method === 'GET' && url.pathname === '/api/whitelist') {
-          sendJson({ allow: cfg.allow ?? { private: [], groups: [] }, deny: cfg.deny ?? { private: [], groups: [] }, ownerQQ: cfg.ownerQQ ?? null });
-          return;
-        }
-        if (req.method === 'POST' && url.pathname === '/api/whitelist') {
-          const body = await readBody();
-          const toNum = (arr) => Array.isArray(arr) ? [...new Set(arr.map((x) => Number(String(x).trim())).filter((n) => Number.isFinite(n)))] : undefined;
-          const configFile = path.join(ROOT, 'config.json');
-          // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 allow/deny/ownerQQ
-          const file = readConfigObject(configFile);
-          const allow = {
-            private: toNum(body.allow?.private) ?? (file.allow?.private ?? []),
-            groups: toNum(body.allow?.groups) ?? (file.allow?.groups ?? [])
-          };
-          const deny = {
-            private: toNum(body.deny?.private) ?? (file.deny?.private ?? []),
-            groups: toNum(body.deny?.groups) ?? (file.deny?.groups ?? [])
-          };
-          // 管理员 QQ 可在控制台输入；空值=清除管理员（fail-closed），非法值拒绝写入。
-          let ownerQQ = cfg.ownerQQ ?? null;
-          if (body.ownerQQ !== undefined) {
-            try {
-              ownerQQ = normalizeOwnerQQ(body.ownerQQ);
-            } catch (error) {
-              sendJson({ ok: false, error: error?.message ?? 'ownerQQ 无效' }, 400);
-              return;
-            }
-          }
-          file.allow = allow;
-          file.deny = deny;
-          file.ownerQQ = ownerQQ;
-          atomicWriteJson(configFile, file);
-          cfg.allow = { private: allow.private, groups: allow.groups };
-          cfg.deny = { private: deny.private, groups: deny.groups };
-          cfg.ownerQQ = ownerQQ;
-          reconcileSessionPolicies();
-          log(`控制台：白名单已更新（群: ${allow.groups.join(',') || '无'}，私聊: ${allow.private.join(',') || '无'}，管理员: ${ownerQQ ?? '未设置'}）`);
-          sendJson({ ok: true, allow, deny, ownerQQ });
-          return;
-        }
-
-        // ── DSH 模型与思考强度（路由体在 src/http/dsh-routes.js）──────────────
+// ── DSH 模型与思考强度（路由体在 src/http/dsh-routes.js）──────────────
         if (await handleDshRoutes({ req, url, sendJson, readBody, deps: dshRouteDeps })) return;
 
         // ── 安全拦截通知 / 控制台令牌（路由体在 src/http/security-routes.js）──
         if (await handleSecurityRoutes({ req, url, sendJson, readBody, deps: securityRouteDeps })) return;
 
-        // ── 测试发送消息（强制走白名单校验） ───────────────────────────────────
-        if (req.method === 'POST' && url.pathname === '/api/test-send') {
-          const body = await readBody();
-          const kind = body.kind === 'private' ? 'private' : 'group';
-          const id = Number(body.id);
-          const message = String(body.message ?? '').trim();
-          if (!Number.isFinite(id) || id <= 0) { sendJson({ ok: false, error: '目标 id 无效' }, 400); return; }
-          if (!message) { sendJson({ ok: false, error: '消息不能为空' }, 400); return; }
-          if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
-          if (!allowed(kind, id, cfg)) { sendJson({ ok: false, error: `目标不在白名单内（${kind} ${id}），请先加入白名单` }, 403); return; }
-          if (!modeAllowed(`${kind}:${id}`, kind, id, cfg, currentMode)) { sendJson({ ok: false, error: `当前模式（${currentMode}）不允许向 ${kind}:${id} 发送测试消息` }, 403); return; }
-          try {
-            const safeMessage = escapeCqText(redactKnownTokensOnly(message));
-            const result = kind === 'private'
-              ? await bot.sendPrivateMessage(id, text(safeMessage))
-              : await bot.sendGroupMessage(id, text(safeMessage));
-            log(`控制台：测试发送 ${kind}:${id} 成功`);
-            sendJson({ ok: true, kind, id, message_id: result?.message_id ?? result });
-          } catch (error) {
-            sendJson({ ok: false, error: `发送失败: ${error?.message ?? error}` }, 500);
-          }
-          return;
-        }
+        // ── 白名单 + 测试发送（路由体在 src/http/access-routes.js）────────────
+        if (await handleAccessRoutes({ req, url, sendJson, readBody, deps: accessRouteDeps })) return;
+
         if (req.method === 'POST' && url.pathname === '/api/social/state') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
