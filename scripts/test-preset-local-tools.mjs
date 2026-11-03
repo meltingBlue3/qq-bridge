@@ -103,8 +103,14 @@ const OPTIONAL_BUNDLE_TOOLS = new Set(['subagent_codex', 'subagent_claude_code']
  * 现在只保留一条实现，两边不可能再漂移。
  */
 function collectDshToolNames() {
-  const { names } = collectDshToolNamesShared();
-  return names.size === 0 ? null : new Set(names.keys());
+  // DSH Desktop 把依赖打进 app.asar，某些安装形态下脚本拿不到可扫描的 node_modules。
+  // 这是环境能力缺失，不是守卫名单的错误：跳过对账，绝不让测试因为找不到安装目录而失败。
+  try {
+    const { names } = collectDshToolNamesShared();
+    return names.size === 0 ? null : new Set(names.keys());
+  } catch {
+    return null;
+  }
 }
 /** 允许出现在名单里、但不属于"本地执行"语义的名字（开发/注入器）。 */
 const DEV_TOOL_PREFIX = /^dev_/;

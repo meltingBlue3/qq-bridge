@@ -74,6 +74,8 @@ export function buildMessageEnvelope({
   at,
   ago,
   seq,
+  messageId,
+  forwardIds,
 }) {
   const { quote, text: body } = splitQuote(text);
   const attrs = [
@@ -83,6 +85,14 @@ export function buildMessageEnvelope({
     `role="${isOwner ? 'owner' : 'member'}"`,
   ];
   if (seq !== undefined && seq !== null && seq !== '') attrs.push(`seq="${xmlAttr(seq)}"`);
+  // messageId 是 QQ 的原始消息 id，引用回复/看图/查转发都要用它；seq 只是本地水位，
+  // 两者不能互相替代。大整数必须以字符串透传，不能被 JSON number 截断。
+  if (messageId !== undefined && messageId !== null && messageId !== '') {
+    attrs.push(`messageId="${xmlAttr(messageId)}"`);
+  }
+  if (Array.isArray(forwardIds) && forwardIds.length) {
+    attrs.push(`forwards="${xmlAttr(forwardIds.join(','))}"`);
+  }
   if (at) attrs.push(`at="${xmlAttr(at)}"`);
   if (ago) attrs.push(`ago="${xmlAttr(ago)}"`);
   const quotePart = quote

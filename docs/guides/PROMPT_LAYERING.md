@@ -141,11 +141,16 @@ preset 的 persona.prefix 开头：{{qqPersona}}
 用户消息一律包成 XML，属性由桥接生成，正文只进 `<content>`：
 
 ```xml
-<qq_message kind="private|group" from="昵称" qq="QQ号" role="owner|member">
+<qq_message kind="private|group" from="昵称" qq="QQ号" role="owner|member"
+            seq="本地水位" messageId="QQ 原始消息 id" forwards="转发 id1,id2"
+            at="本地时间" ago="距现在多久">
 <content>用户正文（& < > " ' 全部转义）</content>
 <media>桥接生成的媒体提示</media>
 </qq_message>
 ```
+
+`seq` 是桥接本地水位（收尾用），`messageId` 是 QQ 原始消息 id（引用/看图/查转发用），
+两者不能互换；快照里同时给出，避免模型把 seq 当 messageId 去调用工具。
 
 规则：
 

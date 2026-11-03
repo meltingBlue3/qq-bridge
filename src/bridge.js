@@ -15,6 +15,8 @@ import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { buildInboundMessageBlock, buildMessageEnvelope, buildMessageList, neutralizeControlMarkers, QQ_MESSAGE_TAG } from './inbound-message.js';
+import { authorizeAgentRequest } from './route-policy.js';
+import { atomicWriteJson, atomicWriteText, readConfigObject, readJsonSafe } from './json-file.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
@@ -122,87 +124,6 @@ function settingFromDshNamespace(ns, key) {
     if (Object.prototype.hasOwnProperty.call(layer, key) && layer[key] !== undefined) return layer[key];
   }
   return undefined;
-}
-
-// 读取 JSON 文件并容错：Windows 下常见 UTF-8 BOM（\uFEFF）会令 JSON.parse 失败。
-// required=true 时文件缺失或解析失败直接抛错（用于启动必需配置，fail-fast）。
-function readJsonSafe(file, fallback, required = false) {
-  try {
-    let text = fs.readFileSync(file, 'utf8');
-    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-    return JSON.parse(text);
-  } catch (error) {
-    if (required) throw new Error(`配置文件读取/解析失败：${file}（${error?.message ?? error}）`);
-    return fallback;
-  }
-}
-
-/**
- * 读取 config.json，并保证拿到一个**可安全改写的普通对象**。
- *
- * 为什么不是 `readJsonSafe(file, null, true) ?? {}`：控制台这些端点都是
- * 「读整份 config → 改一个字段 → 原子写回」。JSON.parse 对字面量 `null` 是**成功**的，
- * 于是 `file` 可能是 null：`file.socialV2` 直接 TypeError（保存接口 500，且错误信息
- * 完全指不出"配置文件顶层是 null"）；而用 `?? {}` 兜底更糟 —— 回写会把整份配置替换成
- * 只含本次提交字段的新对象，用户的白名单、令牌、模式全被抹掉。
- * 所以：不是普通对象就抛错，让调用方的 try/catch 返回 500（与各端点注释里
- * "配置文件损坏时直接 500，绝不回写" 的既有约定一致）。
- */
-function readConfigObject(file) {
-  const parsed = readJsonSafe(file, null, true);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    const kind = parsed === null ? 'null' : Array.isArray(parsed) ? '数组' : typeof parsed;
-    throw new Error(`config.json 顶层不是对象（实际是 ${kind}），已拒绝改写以免覆盖整份配置：${file}`);
-  }
-  return parsed;
-}
-
-/**
- * 原子替换：`fs.renameSync` 覆盖一个「正被别人打开」的目标，在 Windows 上会抛 EPERM
- * （Defender / 编辑器 / 资源管理器预览 / 云同步都可能在这个窗口里碰它）。
- * 实测本机可复现。这里退避重试几次；实在不行才抛，让调用方决定怎么提示。
- */
-function renameWithRetry(from, to, attempts = 4) {
-  let lastError;
-  for (let i = 0; i < attempts; i += 1) {
-    try {
-      fs.renameSync(from, to);
-      return;
-    } catch (error) {
-      lastError = error;
-      if (error?.code !== 'EPERM' && error?.code !== 'EBUSY' && error?.code !== 'EACCES') throw error;
-      // 同步忙等一小会儿：调用点大多在启动/收尾路径，不值得为它改成异步。
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40 * (i + 1)); } catch {}
-    }
-  }
-  throw lastError;
-}
-
-// 原子写 JSON 文件：先写唯一临时文件再 rename，避免进程中断写坏配置，也避免固定临时名被并发/符号链接攻击利用。
-function atomicWriteJson(file, obj) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-    renameWithRetry(tmp, file);
-  } catch (error) {
-    // 失败时别把随机名临时文件留在 state/ 里当垃圾。
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
-}
-
-// 原子写文本文件。
-function atomicWriteText(file, text) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 });
-    renameWithRetry(tmp, file);
-  } catch (error) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
 }
 
 // 控制台鉴权 token：未配置时自动生成并持久化到 state/console-token，避免默认无鉴权。
@@ -943,13 +864,8 @@ function loadConfig() {
     maxListCount: 100,
     includeInPrompt: true,
     promptMaxStickers: 8,
-    collect: {
-      enabled: true,
-      maxPerMinute: 2,
-      maxPerHour: 10,
-      maxRemarkChars: 20,
-      ...((cfg.socialV2?.sticker?.collect) ?? {})
-    },
+    // 注意：`...(cfg.socialV2?.sticker ?? {})` 会整体覆盖 collect，所以 collect 必须放在
+    // spread 之后再深度合并一次；上面不再重复写一份（旧代码两份相同字面量，读的人会误以为有差异）。
     ...(cfg.socialV2?.sticker ?? {}),
     collect: {
       enabled: true,
@@ -3280,42 +3196,9 @@ async function main() {
         }
         return;
       }
-      // 智能体调用隔离（集中关卡）。
-      //
-      // 背景：控制台令牌是「管理端全权」，会话令牌是「只能动自己这个会话」。MCP 工具进程
-      // 两者都持有，所以「这次请求到底是智能体发的还是管理端发的」必须由请求自己声明。
-      // 各端点用 `if (x-agent-token && !agentTokenOk(...))` 做会话绑定校验，但那个写法在
-      // **头缺失时整条跳过** —— 而头缺失恰恰是模型没传 token 时的自然结果
-      // （旧版 mcp-snowluma-safe.js 用 `...(token ? {...} : {})` 直接省略了这个头）。
-      // 于是「漏传令牌」不是被拒绝，而是**升级成控制台全权**：典型的 confused deputy。
-      //
-      // 现在 MCP 端一律带上 x-agent-call: 1；带了令牌就必须命中某个活跃会话，
-      // 端点自己漏写校验也不会退回管理端。
-      //
-      // 但「没带令牌」的智能体调用不能一律拒绝：closed-agent（管理员私聊）模式下模型
-      // 本来就**没有**会话令牌（令牌只在 reserved2 的唤醒提示里下发），而 qq_send_group_message
-      // / qq_list_groups 等工具必须在这个模式里可用（工具描述写的也是"closed-agent 模式不需要"）。
-      // 这些端点各自按模式判定（/api/send/* 只在 closed-agent 放行；/api/images/* 在 reserved2
-      // 强制要令牌；/api/status 对智能体调用只回最小对象），所以这里把「无令牌智能体调用」
-      // 限制到这条非 v2 会话面；整个 /api/socialV2/ 前缀一概不放——那里的 token 校验全是
-      // `if (x-agent-token && …)`，放进来就等于退化成管理端全权（confused deputy）。
-      if (req.headers['x-agent-call'] !== undefined) {
-        const agentToken = req.headers['x-agent-token'];
-        const hasToken = typeof agentToken === 'string' && agentToken !== '';
-        if (hasToken && !isLiveAgentToken(agentToken)) {
-          sendJson({ ok: false, error: '未授权：智能体调用携带的会话令牌无效' }, 403);
-          return;
-        }
-        if (!hasToken) {
-          const tokenlessAgentAllowed = url.pathname === '/api/status'
-            || url.pathname.startsWith('/api/send/')
-            || url.pathname.startsWith('/api/images/');
-          if (!tokenlessAgentAllowed) {
-            sendJson({ ok: false, error: '未授权：该接口的智能体调用必须携带有效的会话令牌' }, 403);
-            return;
-          }
-        }
-      }
+      // 智能体调用隔离：具体规则（带令牌白名单、无令牌窄面、管理端专用接口、只读降级）
+      // 全部集中在 src/route-policy.js 的 authorizeAgentRequest()。这里不再手写分支，
+      // 避免“新增端点时忘记补一处”再次退化成 confused deputy。
       // CSRF 防护：所有写操作必须是 application/json，且（若带 Origin）必须来自本机页面。
       // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
       // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
@@ -3336,74 +3219,22 @@ async function main() {
         }
       }
       try {
-        // 空 agent token 一律拒绝，防止 MCP 传入空字符串时被当作“管理端/无 token”绕过校验
-        if (req.headers['x-agent-token'] === '') {
-          sendJson({ ok: false, error: 'agent token 不能为空' }, 403);
+        // 身份 × 路由授权：具体规则集中在本模块之外的 src/route-policy.js（纯函数、默认拒绝、
+        // 可单测）。这里只把桥接的实时状态传进去；拒绝直接返回，不进入任何业务分支。
+        const routeAuth = authorizeAgentRequest({
+          method: req.method,
+          pathname: url.pathname,
+          headers: req.headers,
+          isLiveAgentToken,
+          mode: currentMode,
+          socialV2Paused: socialV2.paused,
+          socialV2Enabled: cfg.socialV2?.enabled !== false,
+          slangStoreWritable,
+          stickerStoreWritable
+        });
+        if (!routeAuth.ok) {
+          sendJson({ ok: false, error: routeAuth.error }, routeAuth.status);
           return;
-        }
-        // 暂停二代 AI 时，所有带 agent token 的 v2 工具调用一律拒绝
-        if (socialV2.paused && req.headers['x-agent-token'] && (url.pathname.startsWith('/api/socialV2/') || url.pathname.startsWith('/api/send/') || url.pathname.startsWith('/api/images/'))) {
-          sendJson({ ok: false, error: 'AI 已暂停，当前不允许执行 v2 工具' }, 403);
-          return;
-        }
-        // 二代模式总开关：关闭后 agent token 调用的 v2 工具全部拒绝（控制台仍可管理）
-        if (cfg.socialV2?.enabled === false && req.headers['x-agent-token'] && (url.pathname.startsWith('/api/socialV2/') || url.pathname.startsWith('/api/send/') || url.pathname.startsWith('/api/images/'))) {
-          sendJson({ ok: false, error: '二代模式已关闭，当前不允许执行 v2 工具' }, 403);
-          return;
-        }
-        // 模式隔离：带 agent token 的 v2 接口只允许在 reserved2 模式下使用
-        if (req.headers['x-agent-token'] && url.pathname.startsWith('/api/socialV2/') && currentMode !== 'reserved2') {
-          sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403);
-          return;
-        }
-        // 管理端专用 v2 接口：带 agent token 的请求一律拒绝，防止 MCP 工具越权访问控制台功能
-        // /api/socialV2/initial-prompt 也在这里：它是操作者写给 AI 的"环境背景"，
-        // 让 AI 自己读/改等于把控制台的管理输入（以及未来可能写入的其它群信息）交给会话主体。
-        const adminOnlyV2Paths = ['/api/socialV2/config', '/api/socialV2/activity', '/api/socialV2/reset', '/api/socialV2/states', '/api/socialV2/wake', '/api/socialV2/initial-prompt'];
-        if (req.headers['x-agent-token'] && (adminOnlyV2Paths.includes(url.pathname) || (url.pathname === '/api/socialV2/feedback' && req.method === 'GET') || (url.pathname === '/api/socialV2/tool-log' && req.method === 'GET'))) {
-          sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
-          return;
-        }
-        // 表情库管理接口只允许控制台（带 agent token 的 v2 工具一律拒绝，防止越权改库）
-        if (req.headers['x-agent-token'] && (url.pathname === '/api/stickers' || url.pathname.startsWith('/api/stickers/'))) {
-          sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
-          return;
-        }
-        // agent token 默认拒绝：MCP 的 v2 工具同时携带 x-console-token 与 x-agent-token，
-        // 因此仅靠控制台令牌挡不住 AI。这里改成白名单：只有 AI 真正需要的面放行，
-        // 其余（人格/提示词/思考强度/白名单/重启…）一律 403——避免以后新增管理端点时忘记拉黑。
-        if (req.headers['x-agent-token']) {
-          const agentAllowed = url.pathname === '/api/status'
-            || url.pathname.startsWith('/api/socialV2/')
-            || url.pathname.startsWith('/api/send/')
-            || url.pathname.startsWith('/api/images/')
-            || url.pathname === '/api/authorize/read';
-          if (!agentAllowed) {
-            sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
-            return;
-          }
-        }
-        // 只读降级：黑话库/表情库在启动时加载失败时，写接口必须**明确失败**。
-        // 旧行为是 save 函数里只打一行日志就 return，而接口照样回 {ok:true}：
-        // 控制台显示"✅ 已保存"，实际只改在内存里，重启后全部消失。
-        if (req.method !== 'GET') {
-          const readonlyStore = (!slangStoreWritable && (url.pathname === '/api/slang'
-            || url.pathname === '/api/slang/clear'
-            || url.pathname === '/api/slang/extract'
-            || url.pathname === '/api/slang/research'
-            || url.pathname.startsWith('/api/slang/batch-')
-            || url.pathname === '/api/socialV2/slang/submit')) ? '黑话库'
-            : (!stickerStoreWritable && (url.pathname === '/api/stickers/sync'
-              || url.pathname === '/api/stickers/note'
-              || url.pathname === '/api/stickers/remark'
-              || url.pathname === '/api/socialV2/sticker-note'
-              || url.pathname === '/api/socialV2/sticker-remark'
-              || url.pathname === '/api/socialV2/collect-sticker')) ? '表情库'
-              : '';
-          if (readonlyStore) {
-            sendJson({ ok: false, error: `${readonlyStore}处于只读降级状态（启动时加载失败，未覆盖原文件），本次修改不会落盘；请修复 state/ 下的对应文件后重启桥接` }, 503);
-            return;
-          }
         }
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
@@ -10339,6 +10170,8 @@ async function main() {
       isOwner: !!m.isOwner,
       text: m.text ?? '',
       seq: m.seq,
+      messageId: m.messageId,
+      forwardIds: m.forwardIds,
       at: m.at,
       ago: m.ago,
     });

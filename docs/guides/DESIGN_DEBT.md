@@ -1,0 +1,72 @@
+# 设计债与模块边界（DESIGN_DEBT）
+
+> 本文记录 `fix/design-debt` 分支的设计原则、已完成的拆分、以及仍然存在的结构性缺陷。
+> 它不是功能说明；功能与安全边界见 [../../RULES.md](../../RULES.md) 与
+> [SECURITY_BASELINE.md](SECURITY_BASELINE.md)。
+
+## 为什么要专门处理设计债
+
+`src/bridge.js` 是历史演进的单文件主程序：截至本分支开始时约 **11.8k 行**，`main()`
+内部有 **200+ 个嵌套函数**，HTTP 端点、社交状态机、唤醒调度、媒体处理、语音、控制台
+全都共享同一个闭包。它跑得很稳，但带来了三个可量化的代价：
+
+1. **不可直接测试**：测试只能把 `bridge.js` 当源码字符串塞进 `vm`，手工注入几十个
+   符号。每次新增一个 import，所有 VM 夹具都要跟着补，漏一个就是“测试全红但生产正常”。
+2. **规则没有单一来源**：例如 HTTP 的 agent/管理端权限矩阵过去散落在 4 段 `if` 里，
+   新增端点时很容易只改了其中一处。
+3. **改动半径不可控**：任何跨功能改动都要在 12k 行的同一闭包里推理，无法用模块边界
+   隔离回归。
+
+## 已完成的拆分（本分支）
+
+| 模块 | 接口 | 解决的重复/风险 | 回归 |
+| --- | --- | --- | --- |
+| `src/route-policy.js` | `authorizeAgentRequest()` + 路由分类函数 | 把「身份 × 路由」矩阵从 `bridge.js` 的 100+ 行嵌套 `if` 收成一张默认拒绝的策略表；管理端点不会再因为漏写一行校验而暴露给会话 agent | `scripts/test-route-policy.mjs`（11 项） |
+| `src/json-file.js` | `readJsonSafe` / `readConfigObject` / `atomicWriteJson` / `atomicWriteText` / `renameWithRetry` | 48 处调用点共享同一套「BOM 容错、配置顶层校验、唯一临时文件、Windows rename 退避」实现，避免各端点各写一份 | `scripts/test-json-file.mjs`（6 项） |
+| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 37/37 |
+
+修复后基线：`npm run test:audit` **37/37 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+超时/误报的脚本）。
+
+## 仍然存在的设计债（按优先级）
+
+### P0 — `bridge.js` 仍是巨石
+
+目标不是“一次重写”，而是沿**已经稳定的纯逻辑边界**逐块外移：
+
+1. `startConsoleServer()`（约 3.9k 行）→ `src/http/console-server.js`，以显式
+   `deps` 对象注入；路由策略已经先抽出，拆分时只需接业务处理器。
+2. `reserved2` 的会话状态 / 唤醒调度（约 3k 行）→ `src/social-v2/`，状态形状与
+   时间计算可独立单测。
+3. 一代 `reserved` 状态机 → `src/social-v1/`（低优先级，默认模式已不是它）。
+
+每一步必须满足：`node --check src/bridge.js` 通过、`npm run test:audit` 全绿、
+新增模块有直接单测（不经过 VM 源码注入）。
+
+### P1 — 配置默认值仍是手写字面量
+
+`loadConfig()` 约 350 行，`config.example.json` 另有一份模板；两者靠人工同步。
+下一步把默认值收进 `src/config-defaults.js`，由生成脚本产出 `config.example.json`，
+并加一个配置契约测试（键集合、默认值类型、敏感字段为空）。
+
+### P1 — 状态文件各自手写加载/保存
+
+`sessions.json`、`social-v2.json`、`slang.json`、`stickers.json`、`initial-prompts.json`
+各自重复「读失败 → 只读降级 / 损坏 → 不覆盖」的样板。下一步抽 `src/json-store.js`
+（`createJsonStore({file, fallback, onCorrupt})`），统一可写标志与原子落盘。
+
+### P2 — 测试仍有一部分是源码字符串断言
+
+`test-voice.mjs` 等用 `bridge.includes('...')` 找端点，属于过渡手段。随着模块外移，
+这些断言应改为导入模块并断言接口；在完成前，**新增源码字符串断言需要说明为什么无法
+用模块接口替代**。
+
+## 改动规则
+
+1. 新端点默认只给控制台；要暴露给 agent，必须在 `route-policy.js` 显式列入白名单并
+   补 `test-route-policy.mjs` 用例。
+2. 任何「读整份配置 → 改一个字段 → 写回」的代码必须走 `readConfigObject()` +
+   `atomicWriteJson()`，禁止手写 `JSON.parse(fs.readFileSync(...))` 回写。
+3. 新增 `bridge.js` 顶层 import 时，同步更新 `scripts/audit-bridge-harness.mjs` 的
+   VM 注入（直到 P0 完成）；否则会在测试里表现为 `xxx is not defined`。
+4. 纯函数/文件 I/O 优先放进独立 `src/*.js`，测试直接 `import`，不要再塞进 `main()`。

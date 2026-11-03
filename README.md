@@ -273,6 +273,8 @@ qq-bridge/
   plugins/qq-mode-console  # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
   src/
     bridge.js           # 主程序
+    route-policy.js     # HTTP 身份 × 路由授权策略（纯函数，默认拒绝）
+    json-file.js        # JSON/文本原子读写（BOM、配置顶层校验、Windows rename 重试）
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
     md-to-plain.js      # Markdown → QQ 纯文本
     self-test.js        # DSH 侧自测

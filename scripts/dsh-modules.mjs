@@ -41,6 +41,28 @@ function candidateProfiles(home) {
   return names;
 }
 
+/**
+ * DSH Desktop 的 npm 依赖不写入 profile 的 package.json（bundle 由桌面壳内置），
+ * 因此从 profile 反查不到。这里扫描 Windows 默认安装位置：
+ *   %LOCALAPPDATA%\Programs\<DSH*>\resources\app.asar.unpacked\node_modules
+ * 以及非 asar 安装的 resources\node_modules。找不到就返回空数组，绝不瞎猜。
+ */
+function desktopInstallModuleDirs() {
+  if (process.platform !== 'win32') return [];
+  const local = process.env.LOCALAPPDATA;
+  if (!local) return [];
+  const programs = path.join(local, 'Programs');
+  const result = [];
+  let entries = [];
+  try { entries = fs.readdirSync(programs, { withFileTypes: true }); } catch { return []; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^dsh/i.test(entry.name)) continue;
+    result.push(path.join(programs, entry.name, 'resources', 'app.asar.unpacked', 'node_modules'));
+    result.push(path.join(programs, entry.name, 'resources', 'node_modules'));
+  }
+  return result.filter((dir) => fs.existsSync(dir));
+}
+
 export function dshModulesDir() {
   const override = process.env.DSH_INSTALL_MODULES || process.env.DSH_MODULES;
   if (override) return override;
@@ -55,6 +77,13 @@ export function dshModulesDir() {
         const dir = findNodeModules(req.resolve(spec));
         if (dir) return dir;
       } catch { /* 换下一个 specifier，再换下一个 profile */ }
+    }
+  }
+
+  for (const dir of desktopInstallModuleDirs()) {
+    if (fs.existsSync(path.join(dir, '@deepseek-ai', 'dsh-persona'))
+      || fs.existsSync(path.join(dir, 'js-yaml'))) {
+      return dir;
     }
   }
 

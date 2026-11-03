@@ -17,6 +17,7 @@
 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) | 控制台「令牌与花费」看板：数据来源、计价口径（峰谷分时）、API、配置 | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台离线预览（`npm run preview:console`）与离线浏览器回归（`npm run test:console-ui`）怎么用 | ✅ 2026 整理时自 `scripts/` 移入 |
 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) | **安全基线与威胁模型**：威胁主体、已实现的边界（准入/工具面/出站/控制台/落盘/网络）、已知残余风险、发布前回归清单、改动检查单 | ✅ **改动安全相关代码前必读**（2026-09-20 新增） |
+| [guides/DESIGN_DEBT.md](guides/DESIGN_DEBT.md) | **设计债与模块边界**：`bridge.js` 巨石的分阶段拆分计划、已抽出的深模块（`route-policy` / `json-file`）、配置与状态存储的后续整合、改动规则 | ✅ **改 `bridge.js` 或新增端点前必读**（2026-11-03 新增） |
 
 ## design/ —— 设计与规划（读设计意图用）
 

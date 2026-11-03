@@ -180,9 +180,15 @@ console.log('## qq-bridge 语音系统：控制台与 preset');
 
 console.log('## 文档');
 {
-  const voice = read(path.join('docs', 'guides', 'VOICE.md'));
-  for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
-    ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+  // docs/guides/VOICE.md 被 .gitignore 排除（含本机路径），全新 clone 里不存在。
+  // 可选文档缺失不应判失败；存在时才校验内容。
+  if (!exists(path.join('docs', 'guides', 'VOICE.md'))) {
+    console.log('  ⏭  跳过：docs/guides/VOICE.md 不在本工作副本（被 .gitignore 排除的本地文档）');
+  } else {
+    const voice = read(path.join('docs', 'guides', 'VOICE.md'));
+    for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
+      ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+    }
   }
   const readme = read('README.md');
   ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
