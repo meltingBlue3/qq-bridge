@@ -32,14 +32,14 @@
 | `src/social-v2/wake-policy.js` | `normalizeSpeakerIdsV2` / `pickWakeTriggersV2` / `defaultWakeConfigV2` / `preSleepWaitBlockedV2` / `computeWakeSafetyV2` / `wakePriorityV2` 等 | reserved2 唤醒策略的纯函数层：默认配置、触发字段过滤、沉睡前观察判定、防永眠、优先级；bridge 只留绑定 `cfg.socialV2.wake` 的薄包装 | `scripts/test-wake-policy.mjs`（8 项） |
 | `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` / 路由组 / `wake-policy`（含 import-as 别名）；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 44/44 |
 
-修复后基线：`npm run test:audit` **63/63 全绿**（修复前为 26/35，含多个因 VM 缺符号而
-超时/误报的脚本）。`bridge.js` 从 11,822 行降到约 8,200 行。
+修复后基线：`npm run test:audit` **64/64 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+超时/误报的脚本）。`bridge.js` 从 11,822 行降到约 7,900 行。
 
 ## 仍然存在的设计债（按优先级）
 
 ### P0 — `bridge.js` 拆分进度（2026-11-03）
 
-已完成外移（均带直接单测，`npm run test:audit` 63/63 全绿）：
+已完成外移（均带直接单测，`npm run test:audit` 64/64 全绿）：
 `route-policy` / `json-file` / `config` / `http-utils` / `initial-prompts` / `roles` /
 `http/role-routes` / `http/preset-routes` / `http/security-routes` / `http/dsh-routes` /
 `http/access-routes` / `http/social-routes` / `http/notify-routes` / `http/token-routes` /
@@ -47,19 +47,24 @@
 `http/socialv2-send-routes` / `http/socialv2-sticker-routes` / `http/voice-routes` /
 `http/socialv2-wait-route` / `http/memory-routes` / `http/socialv2-misc-routes` /
 `http/socialv2-read-routes` / `http/slang-routes` / `http/send-routes` /
-`social-v2/wake-policy` / `social-v2/state-store`。`startConsoleServer()` 的全部尾部端点
-（check-send、tool-log、feedback、my-recent、record-sent、message-detail、
-forward-message/media、active-members、group-members、slang、authorize/read、
-images/message、`/api/send/*`）已全部外移完成。
+`social-v2/wake-policy` / `social-v2/state-store` / `social-v2/wake-scheduler`。
+`startConsoleServer()` 的全部尾部端点（check-send、tool-log、feedback、my-recent、
+record-sent、message-detail、forward-message/media、active-members、group-members、
+slang、authorize/read、images/message、`/api/send/*`）已全部外移完成。
 `unquoteJsonString` 纯函数已从 bridge.js 移入 `http-utils.js`；
 reserved2 状态读写（getSocialV2State/load/save）已迁入 `social-v2/state-store.js`
-（工厂注入 ensureWakeable/定时器/令牌回调；多实例写覆盖保护有直接单测钉住）。
+（工厂注入 ensureWakeable/定时器/令牌回调；多实例写覆盖保护有直接单测钉住）；
+reserved2 唤醒调度（sendWakePrompt/scheduleWake/setupSleepTimer/scheduleReplyCheck/
+scheduleProactiveCheck/replayPendingWakeReasons/isConversationBusy/clearTimers）已迁入
+`social-v2/wake-scheduler.js`（工厂注入 deliverPrompt/buildWakePrompt/判忙上下文；
+合并窗口优先级升级、限频延后重试、失败回滚+有限睡眠恢复、回放分流、判忙租约
+等定时器语义全部有 mock-timers 直接单测钉住）。
 
-剩余（按优先级）：
-1. reserved2 唤醒调度（`scheduleWakeV2` / `setupSleepTimerV2` / `sendWakePromptV2` /
-   `scheduleReplyCheckV2` / `cancelReplyCheckV2` / `scheduleProactiveCheckV2`）。
-   这是最后一大块：定时器链与 bot.send / DSH 会话深度耦合，迁移时需按
-   「注入 bot/DSH/提示词回调」的工厂形态拆出，并保留全部既有定时器语义。
+**P0 拆分到此完成**：`startConsoleServer()` 之内已无业务路由体，reserved2 的
+状态与调度全部落在 `src/social-v2/` 的三个深模块（wake-policy / state-store /
+wake-scheduler），bridge.js 剩余部分是消息管道、prompt 构建与 DSH 会话编排。
+后续可选（非 P0）：把 `startConsoleServer()` 的「deps 组装 + http.createServer 壳」
+再抽成 `src/http/console-server.js`，让 bridge.js 完全不感知 HTTP 层。
 
 每一步必须满足：`node --check src/bridge.js` 通过、`npm run test:audit` 全绿、
 新增模块有直接单测（不经过 VM 源码注入）。
