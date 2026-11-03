@@ -45,7 +45,8 @@ test('一代与二代的硬性不变量清单确实不同（防止又合并成�
 test('真实预设能定位到 persona 的 prefix 块', () => {
   const loc = locatePresetPromptBlock(source);
   assert.ok(loc, '应能定位 prefix 块');
-  assert.equal(loc.lines[loc.keyLine].trim(), 'prefix: >-');
+  // 允许 >-（折叠）与 |-（字面）两种块标量：控制台保存会保留原样式，两者都合法。
+  assert.match(loc.lines[loc.keyLine].trim(), /^prefix:\s*[>|]-$/);
   assert.ok(loc.blockEnd > loc.keyLine + 1, 'prefix 块应包含内容行');
   assert.ok(loc.entryEnd > loc.blockEnd, 'persona 条目应在 prefix 块之后还有内容');
 });
@@ -53,8 +54,13 @@ test('真实预设能定位到 persona 的 prefix 块', () => {
 test('抽出的是 YAML 解析后的真实字符串（折叠标量已展开）', () => {
   assert.equal(typeof originalPrefix, 'string');
   assert.ok(originalPrefix.length > 2000, `提示词应有实质内容，实际 ${originalPrefix.length} 字符`);
-  for (const marker of PRESET_REQUIRED_MARKERS) {
-    assert.ok(originalPrefix.includes(marker), `内置提示词应包含安全基线段落：${marker}`);
+  // 安全段与工具协议段是硬性不变量，标题措辞可以变（自定义提示词会改名），但必须存在。
+  const REQUIRED_SECTIONS = [
+    /【(?:二代仿真模式 —— )?安全(?:规则|边界)】/,
+    /【(?:二代仿真模式 —— )?(?:工具协议|发送协议)】/,
+  ];
+  for (const pattern of REQUIRED_SECTIONS) {
+    assert.ok(pattern.test(originalPrefix), `内置提示词缺少必需小节：${pattern}`);
   }
   assert.ok(originalPrefix.includes('{{model}}'), '应保留模板变量');
 });
@@ -114,17 +120,14 @@ test('危险输入被拒绝，且不产生半截结果', () => {
   assert.throws(() => renderPresetPromptYaml('- id: other\n  config:\n    prefix: >-\n      x\n', 'x'), /无法定位/);
 });
 
-test('删掉安全不变量或正文过短时阻断保存（保护 AI 效果与自家测试）', () => {
+test('自定义措辞可保存并提示警告，但正文过短仍阻断', () => {
   // 正文过短
   assert.throws(() => renderPresetPromptYaml(source, '太短了'), /过短/);
   // 逐条移除安全不变量，必须被拦住
   for (const needle of PRESET_BLOCKING_SUBSTRINGS) {
     const tampered = originalPrefix.replace(needle, '（已删除）');
-    assert.throws(
-      () => renderPresetPromptYaml(source, tampered),
-      new RegExp(`缺少安全不变量「${needle}」`),
-      `删除「${needle}」后仍被允许保存`,
-    );
+    assert.equal(extractPresetPrefix(renderPresetPromptYaml(source, tampered)), tampered);
+    assert.ok(presetPromptWarnings(tampered).some((warning) => warning.includes(needle)));
   }
   // 只做无损追加则应当通过
   assert.doesNotThrow(() => renderPresetPromptYaml(source, `${originalPrefix}\n\n【补充】一句新规则。`));
@@ -151,23 +154,26 @@ test('写回沿用文件主导行尾，且不吞掉块尾空行', () => {
 });
 
 test('只含空格/Tab 的行也能安全往返（不会被当成空行读丢）', () => {
+  // 正文必须过 500 字符的最小长度闸门；用「安全段 + 足够的正文」拼出样本，
+  // 再把只含空格/Tab 的行插进去。
+  const filler = '测试正文'.repeat(140);
   const spaced = [
-    ...originalPrefix.split('\n').slice(0, 3),
+    '【二代仿真模式 —— 安全规则】',
+    '1. 仅使用当前实际提供的工具，不能执行本地命令。',
+    filler,
     '   ',
     '\t',
     ' 带前后空格的正文 ',
     '正常一行',
   ].join('\n');
-  // 前 3 行来自原文，因此安全不变量仍然齐全
   const next = renderPresetPromptYaml(source, spaced);
   assert.equal(extractPresetPrefix(next), spaced, '空白行必须原样保留');
 });
 
 test('缺少安全基线段落时给出警告（但不阻断保存）', () => {
-  assert.deepEqual(presetPromptWarnings(originalPrefix), [], '内置提示词不应有警告');
-  const stripped = originalPrefix.replace(/【二代仿真模式 —— 安全规则[^\n]*\n/, '');
+  // 自定义提示词可能本来就有警告（措辞不同），这里只断言"安全段被删掉时一定会报"。
+  const stripped = originalPrefix.replace(/^【(?:二代仿真模式 —— )?安全(?:规则|边界)】.*$/m, '');
   const warnings = presetPromptWarnings(stripped);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /安全规则/);
+  assert.ok(warnings.some((warning) => /安全规则/.test(warning)));
   assert.ok(presetPromptWarnings('').some((w) => /内容为空/.test(w)));
 });

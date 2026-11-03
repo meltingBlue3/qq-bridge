@@ -1,0 +1,13 @@
+{
+  "name": "qq-persona",
+  "version": "0.1.0",
+  "description": "Per-session persona section for QQ bridge: resolves {{qqPersona}} from a per-session file so the persona lives in the system prompt, not in user messages.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
+import { buildInboundMessageBlock, buildMessageEnvelope, buildMessageList, neutralizeControlMarkers, QQ_MESSAGE_TAG } from './inbound-message.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
@@ -8081,7 +8082,13 @@ async function main() {
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        const result = unwrap(await api.sessions.selectModel({ sessionId, provider, model, reasoningEffort: effort }), 'session.selectModel');
+        // Relay providers may expose a model without configurable reasoning.
+        // Only pass an effort explicitly supported by the live DSH catalog.
+        const catalog = unwrap(await fetchModelCatalog(), 'session.modelCatalog');
+        const modelInfo = catalog.groups?.find((group) => group.id === provider)?.models?.find((item) => item.id === model);
+        const supportsEffort = modelInfo?.reasoning?.efforts?.some((item) => item.id === effort);
+        const selection = { sessionId, provider, model, ...(supportsEffort ? { reasoningEffort: effort } : {}) };
+        const result = unwrap(await api.sessions.selectModel(selection), 'session.selectModel');
         modelAppliedSessions.set(sessionId, modelSelectionEpoch);
         log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
         return 'applied';
@@ -8986,7 +8993,15 @@ async function main() {
 
   function buildContextBlock(key) {
     const ctx = (social.recentMessages.get(key) ?? []).slice(-Number(cfg.social?.contextWindow ?? 15));
-    return ctx.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}`).join('\n') || '（无）';
+    if (!ctx.length) return '（无）';
+    return buildMessageList(ctx.map((m) => ({
+      kind: String(key).startsWith('group:') ? 'group' : 'private',
+      senderName: m.sender,
+      senderId: m.senderId ?? '',
+      isOwner: !!m.isOwner,
+      text: m.text,
+      mediaHint: mediaHintFor(key, m.messageId, m.media),
+    })), { tag: 'qq_context', attrs: { window: ctx.length } });
   }
 
   // 触发进入活跃（启动阶段 → 活跃阶段）
@@ -9051,7 +9066,14 @@ async function main() {
   // 活跃阶段：只贴"没给过 AI 的新消息"（上下文在会话历史里，不重复贴，不贴人格）
   // allowSilent=false 表示这条必须回（被 @/点名/私聊等），不提供 [SILENT] 出口。
   function buildBatchPrompt(key, newMsgs, allowSilent = true) {
-    const lines = newMsgs.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}`).join('\n');
+    const lines = buildMessageList(newMsgs.map((m) => ({
+      kind: String(key).startsWith('group:') ? 'group' : 'private',
+      senderName: m.sender,
+      senderId: m.senderId ?? '',
+      isOwner: !!m.isOwner,
+      text: m.text,
+      mediaHint: mediaHintFor(key, m.messageId, m.media),
+    })), { tag: 'qq_new_messages', attrs: { count: newMsgs.length } });
     const directionHint = lines.includes('[引用') ? `${DIRECTION_HINT}\n` : '';
     if (!allowSilent) {
       return `【新消息】\n${lines}\n\n${directionHint}请回复消息。\n${SPACE_SPLIT_HINT}`;
@@ -9139,6 +9161,8 @@ async function main() {
       }
       throw error;
     }
+    // 人格卡走 system prompt：每次投递前把当前卡同步到该会话对应的文件（内容没变时跳过）。
+    syncPersonaForSession(sessionId, currentMode);
     let wakeState;
     let wakeToken;
     let wakeSnapshot;
@@ -9151,7 +9175,7 @@ async function main() {
       promptText = buildWakePromptV2(key, opts.wakeReason);
       wakeSnapshot = buildWakeSnapshotV2(key);
       if (wakeSnapshot) {
-        promptText += `\n\n【本次消息快照】\n${JSON.stringify(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
+        promptText += `\n\n【本次消息快照】\n${renderWakeSnapshotXml(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
       }
     }
     let content = [{ type: 'text', text: withSlangContext(promptText) }];
@@ -9374,7 +9398,14 @@ async function main() {
     const targets = key ? (social.pendingSummaries.has(key) ? [[key, social.pendingSummaries.get(key)]] : []) : [...social.pendingSummaries.entries()];
     for (const [k, entry] of targets) {
       if (!entry.items.length) continue;
-      const lines = entry.items.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(k, m.messageId, m.media)}`).join('\n');
+      const lines = buildMessageList(entry.items.map((m) => ({
+        kind: String(k).startsWith('group:') ? 'group' : 'private',
+        senderName: m.sender,
+        senderId: m.senderId ?? '',
+        isOwner: !!m.isOwner,
+        text: m.text,
+        mediaHint: mediaHintFor(k, m.messageId, m.media),
+      })), { tag: 'qq_summary', attrs: { count: entry.items.length } });
       const summaryMedia = entry.items.flatMap((m) => Array.isArray(m.media) ? m.media : []);
       let sessionId;
       try {
@@ -9421,6 +9452,34 @@ async function main() {
     startSocialLoop();
   }
 
+  // 人格卡走 system prompt（plugins/qq-persona 提供的 {{qqPersona}} 变量）：
+  // 桥接把卡写到 <DSH_HOME>/qq-persona/<sessionId>.md，插件在装配 system prompt 时按会话读取。
+  // 因此消息正文里不再拼接人格卡——历史方案（user 消息前缀）见 docs/guides/PROMPT_LAYERING.md §8。
+  const PERSONA_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'qq-persona');
+  const personaWritten = new Map(); // sessionId -> 已写入的正文，避免每轮重复落盘
+  function syncPersonaForSession(sessionId, mode = 'chat') {
+    if (!sessionId) return;
+    // v2 需要对「空格代表分条」的一代示例做改写，沿用 roleTextV2 的既有处理。
+    const body = (mode === 'reserved2' ? roleTextV2() : roleRawContent()).trim();
+    const safeId = String(sessionId).replace(/[^A-Za-z0-9._-]/g, '_');
+    const file = path.join(PERSONA_DIR, `${safeId}.md`);
+    if (!body) {
+      if (personaWritten.has(sessionId)) {
+        try { fs.unlinkSync(file); } catch { /* 文件不存在就忽略 */ }
+        personaWritten.delete(sessionId);
+      }
+      return;
+    }
+    if (personaWritten.get(sessionId) === body) return;
+    try {
+      fs.mkdirSync(PERSONA_DIR, { recursive: true });
+      fs.writeFileSync(file, `${body}\n`, 'utf8');
+      personaWritten.set(sessionId, body);
+    } catch (error) {
+      log(`人格卡写入失败（${sessionId}）：${error?.message ?? error}`);
+    }
+  }
+
   // 当前角色扮演提示：读 state/current-role.json + roles/<角色>.md，
   // 由桥接注入到 QQ 群消息（群友无法通过对话修改，只能由管理端写该文件）。
   // 缓存 key 为两个文件的 mtime，mtime 未变时直接返回，避免每次同步读文件。
@@ -9464,7 +9523,8 @@ async function main() {
     return selected.length > roleInjectMaxChars ? truncateText(selected, roleInjectMaxChars) : selected;
   }
   function currentRoleHint() {
-    return roleHintForMode('v1');
+    // 人格卡已经改走 system prompt（见 syncPersonaForSession），消息正文不再携带任何人格内容。
+    return '';
   }
 
   // 二代仿真模式专用角色提示：去掉一代的 [SILENT] / 空格分句等状态机指令，避免与工具协议冲突。
@@ -9554,7 +9614,7 @@ async function main() {
     return `第 ${bad.join('，')} 条之间像是把同一句话拆开了；如果两条拼起来才完整，请合并成一条，或把断点移到完整句子的边界。`;
   }
 
-  function currentRoleHintV2() {
+  function roleTextV2() {
     // 先按 〔二代〕/〔一代〕 标记筛小节；下面的逐行过滤只是给「没标记的老卡片」兜底。
     const raw = roleHintForMode('v2');
     if (!raw) return '';
@@ -9582,6 +9642,11 @@ async function main() {
       }
     }
     return kept.join('\n');
+  }
+
+  function currentRoleHintV2() {
+    // 同 currentRoleHint：人格卡走 system prompt，不再进消息正文。
+    return '';
   }
 
   // QQ 群成员名片/昵称缓存：@ 段解析用，避免每条消息都调一次 OneBot API。
@@ -10262,6 +10327,35 @@ async function main() {
       packet.recent.reverse();
     }
     return packet;
+  }
+
+  /** 把 wake 快照渲染成 XML：消息正文按不可信数据处理，元数据放属性。 */
+  function renderWakeSnapshotXml(snapshot) {
+    if (!snapshot) return '';
+    const toEnvelope = (m) => ({
+      kind: m.isGroup ? 'group' : 'private',
+      senderName: m.sender ?? m.senderName ?? '未知',
+      senderId: m.senderId ?? m.userId ?? '',
+      isOwner: !!m.isOwner,
+      text: m.text ?? '',
+      seq: m.seq,
+      at: m.at,
+      ago: m.ago,
+    });
+    const parts = [];
+    if (Array.isArray(snapshot.messages) && snapshot.messages.length) {
+      parts.push(buildMessageList(snapshot.messages.map(toEnvelope), { tag: 'qq_unread', attrs: { count: snapshot.messages.length } }));
+    }
+    if (Array.isArray(snapshot.recent) && snapshot.recent.length) {
+      parts.push(buildMessageList(snapshot.recent.map(toEnvelope), { tag: 'qq_recent', attrs: { count: snapshot.recent.length } }));
+    }
+    const meta = [
+      `now="${snapshot.now ?? ''}"`,
+      `unreadCount="${snapshot.unreadCount ?? 0}"`,
+      `readThroughSeq="${snapshot.readThroughSeq ?? 0}"`,
+      `partial="${snapshot.partial ? 'true' : 'false'}"`,
+    ].join(' ');
+    return `<qq_snapshot ${meta}>\n${parts.join('\n')}\n</qq_snapshot>`;
   }
 
   function replyTimingV2(st) {
@@ -11003,14 +11097,18 @@ async function main() {
     // 角色扮演提示注入（仅注入给 agent，不影响群友之间的正常对话语义）
     const roleHint = currentRoleHint();
 
-    // 群聊里带发送者信息，私聊不用；角色提示注入到消息开头（agent 可见）；
-    // 管理员消息带身份标记（供 agent 识别，但其权限仍受工具面硬限制）
-    const promptText = (roleHint ? roleHint + '\n\n' : '')
-      + (isOwner ? '【管理员】' : '')
-      + (kind === 'group'
-        ? `${event.sender?.card || event.sender?.nickname || String(event.user_id)}：${textContent}`
-        : textContent)
-      + mediaHintFor(key, messageRef, mediaList);
+    // 入站消息统一包成 XML：身份看属性，正文只是数据。
+    // 这样群友在正文里打「【管理员】」「【当前时间】」或伪造闭合标签都不会改变权限。
+    const promptText = buildInboundMessageBlock({
+      kind,
+      senderName: kind === 'group'
+        ? (event.sender?.card || event.sender?.nickname || String(event.user_id))
+        : (event.sender?.nickname || String(event.user_id ?? '私聊')),
+      senderId: event.user_id ?? '',
+      isOwner,
+      text: textContent,
+      mediaHint: mediaHintFor(key, messageRef, mediaList),
+    });
 
     appendActivity(`${key} ${isOwner ? '管理员' : '群友'} ${event.sender?.nickname || event.user_id}：${textContent.slice(0, 80)}`);
 
@@ -11041,7 +11139,14 @@ async function main() {
         st.probeDeadline = 0;
         // 私聊：发给你就是叫你，直接即时投递，不等轮询、不参与沉默
         if (kind === 'private') {
-          const promptText = `${roleHint ? roleHint + '\n\n' : ''}${isOwner ? '【管理员】' : ''}${textContent}${mediaHintFor(key, messageRef, mediaList)}`;
+          const promptText = buildInboundMessageBlock({
+            kind,
+            senderName: event.sender?.nickname || String(event.user_id ?? '私聊'),
+            senderId: event.user_id ?? '',
+            isOwner,
+            text: textContent,
+            mediaHint: mediaHintFor(key, messageRef, mediaList),
+          });
           scheduleSocialReply(
             key, promptText,
             Number(cfg.social?.activeReplyDelayMinMs ?? 2000),
@@ -11070,12 +11175,19 @@ async function main() {
       // 触发成功：进入活跃，贴最近上下文 + 当前消息 + 人格（仅此一次），让 AI 回复
       enterActive(key);
       const roleHint = currentRoleHint();
-      const currentLine = (isOwner && kind === 'private') ? `【管理员】${sender}：${textContent}` : `${sender}：${textContent}`;
+      const currentLine = buildInboundMessageBlock({
+        kind,
+        senderName: sender,
+        senderId: event.user_id ?? '',
+        isOwner,
+        text: textContent,
+        mediaHint: mediaHintFor(key, messageRef, mediaList),
+      });
       const directionHint = textContent.includes('[引用') ? DIRECTION_HINT + '\n' : '';
       const replyInstruction = direct
         ? `请回复消息。\n${directionHint}${SPACE_SPLIT_HINT}`
         : `请根据情况决定是否回复。如果不需要回应、想潜水/不接话，请只输出 ${SILENT_MARKER}；否则正常回复。\n${directionHint}${SPACE_SPLIT_HINT}`;
-      const promptText = `${roleHint ? roleHint + '\n\n' : ''}【群聊上下文】\n${buildContextBlock(key)}\n【当前消息】${currentLine}${mediaHintFor(key, messageRef, mediaList)}\n\n${replyInstruction}`;
+      const promptText = `${roleHint ? roleHint + '\n\n' : ''}【群聊上下文】\n${buildContextBlock(key)}\n【当前消息】\n${currentLine}\n\n${replyInstruction}`;
       if (isOwner && kind === 'private') {
         log(`社交模式：管理员私聊触发，立即投递 ${key}`);
         await deliverPrompt(key, promptText, { media: mediaList });

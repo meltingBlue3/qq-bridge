@@ -1,0 +1,4 @@
+- insert:
+    - id: qq-persona
+      name: qq-persona
+      config: {}

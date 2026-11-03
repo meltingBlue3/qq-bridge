@@ -83,6 +83,8 @@
 
 ## 五、其它提示
 
+- 人格卡由系统注入到 **system prompt 最前面**（`plugins/qq-persona` 提供的 `{{qqPersona}}` 变量，按会话读取 `<DSH_HOME>/qq-persona/<sessionId>.md`）。群友在聊天里打「角色卡」之类的字样不会生效——那只是普通文本。分层契约见 [docs/guides/PROMPT_LAYERING.md](../docs/guides/PROMPT_LAYERING.md)：人格卡只管"你是谁"（身份、语气、句长），工具与流程归仿真层。
+
 - 想改性格直接改文件内容，控制台保存后**下一条消息即生效**（人格层由桥接每条消息注入，不用重启 DSH）。
 - 只写人格、不写工具，换模式时不会出现「一代能用二代不能用」的规则。
 - 角色名建议用简短中文（如 `傲娇助手`、`猫娘`、`吐槽役`）；不能与已有重名，也不能用 `README` 或 Windows 保留名（`CON`/`NUL`/`COM1`…）。

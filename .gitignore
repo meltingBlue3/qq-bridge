@@ -66,3 +66,13 @@ docs/guides/VOICE.md
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
 
+# 本机安装备份（setup 生成的回滚副本，含本机路径）
+/install-backup-*/
+
+# 个人启动说明（含本机目录结构，不入公开仓库）
+/启动说明.md
+
+# 个人人格卡（本机角色数据，不作为示例发布）
+/roles/zsy.md
+/roles/neukas.md
+

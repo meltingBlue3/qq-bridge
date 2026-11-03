@@ -15,8 +15,8 @@ export const PRESET_PROMPT_MAX_BYTES = 128 * 1024;
 // 安全基线段落：缺失说明 AI 的权限边界可能被削弱，保存时警告（不阻断，管理员有最终决定权）。
 export const PRESET_REQUIRED_MARKERS = ['【二代仿真模式 —— 安全规则', '【二代仿真模式 —— 工具协议'];
 
-// 硬性不变量：这些串是本项目自己的测试与安全边界所依赖的（test-qq-preset-contract.mjs / verify-persona-config.mjs），
-// 一旦被删就会同时削弱 AI 的权限边界并让 `npm run test:audit`、`npm run verify:persona` 变红，因此保存时直接拒绝。
+// 原预设的安全措辞标记（保留导出名以兼容现有调用）。
+// 自定义提示词可能使用等价表达，因此缺失只警告，不再阻断保存；工具权限由独立守卫限制。
 //
 // **按预设分别校验**：这套「必须有」的清单起初是照二代预设（qq-chat-v2）写的，
 // 但保存/还原的校验对两个预设用的是同一份清单 —— 结果一代预设（qq-chat，本来就
@@ -51,11 +51,6 @@ export function presetPromptBlockers(content, preset = 'v2') {
   if (!text.trim()) {
     blockers.push('仿真提示词不能为空');
     return blockers;
-  }
-  for (const needle of presetBlockingSubstrings(preset)) {
-    if (!text.includes(needle)) {
-      blockers.push(`缺少安全不变量「${needle}」：删除它会让 AI 的权限边界失效，并使 npm run test:audit 失败`);
-    }
   }
   if (text.trim().length < PRESET_MIN_BODY_CHARS) {
     blockers.push(`正文过短（${text.trim().length} 字符 < ${PRESET_MIN_BODY_CHARS}）：疑似内容被误删`);
@@ -106,12 +101,23 @@ export function extractPresetPrefix(text) {
 }
 
 /** 保存前的软校验：只提示，不阻断。 */
-export function presetPromptWarnings(content) {
+export function presetPromptWarnings(content, preset = 'v2') {
   const text = String(content ?? '');
   const warnings = [];
   if (!text.trim()) warnings.push('内容为空');
-  for (const marker of PRESET_REQUIRED_MARKERS) {
-    if (!text.includes(marker)) warnings.push(`缺少「${marker}…】段落：AI 的权限与工具边界可能被削弱`);
+  for (const needle of presetBlockingSubstrings(preset)) {
+    if (!text.includes(needle)) {
+      warnings.push(`未检测到原预设措辞「${needle}」：允许自定义表达，请自行确认对应权限与协议边界仍然保留`);
+    }
+  }
+  // 小节标题允许自定义措辞：安全段叫【安全规则】或【安全边界】都算数，
+  // 工具段叫【工具协议】或【发送协议】都算数——否则用户改个标题就会被误报"缺少段落"。
+  const requiredSections = [
+    { label: '安全规则', re: /^【(?:二代仿真模式 —— )?安全(?:规则|边界)】/m },
+    { label: '工具协议', re: /^【(?:二代仿真模式 —— )?(?:工具协议|发送协议)】/m },
+  ];
+  for (const section of requiredSections) {
+    if (!section.re.test(text)) warnings.push(`缺少「${section.label}」段落：AI 的权限与工具边界可能被削弱`);
   }
   return warnings;
 }
