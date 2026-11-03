@@ -24,9 +24,10 @@
 | `src/route-policy.js` | `authorizeAgentRequest()` + 路由分类函数 | 把「身份 × 路由」矩阵从 `bridge.js` 的 100+ 行嵌套 `if` 收成一张默认拒绝的策略表；管理端点不会再因为漏写一行校验而暴露给会话 agent | `scripts/test-route-policy.mjs`（11 项） |
 | `src/json-file.js` | `readJsonSafe` / `readConfigObject` / `atomicWriteJson` / `atomicWriteText` / `renameWithRetry` | 48 处调用点共享同一套「BOM 容错、配置顶层校验、唯一临时文件、Windows rename 退避」实现，避免各端点各写一份 | `scripts/test-json-file.mjs`（6 项） |
 | `src/config.js` | `loadConfig()` + `normalizeOwnerQQ` / `normalizeIdList` / `normalizeReasoningEffort` / `applyRoleInjectLimit` | 350 行配置默认值、section 合并、socialV2 深度合并从 `main()` 外移；配置可以脱离桥接进程直接测 | `scripts/test-config.mjs`（5 项） |
-| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 38/38 |
+| `src/http-utils.js` | `SECURITY_HEADERS` / `sendJsonResponse` / `readJsonBody` / `isAllowedHost` / `isAllowedOrigin` | 安全响应头、1MB 请求体读取、Host/Origin 回环校验从每个请求闭包外移；可脱开真实 HTTP server 单测 | `scripts/test-http-utils.mjs`（4 项） |
+| `scripts/audit-bridge-harness.mjs` | `bridgeHarness()`（测试专用） | 补注入 `role-card` / `inbound-message` / `route-policy` / `json-file` / `config` / `http-utils`；修复“新增模块后 VM 里 `selectRoleText is not defined`”导致的连锁失败 | `npm run test:audit` 39/39 |
 
-修复后基线：`npm run test:audit` **38/38 全绿**（修复前为 26/35，含多个因 VM 缺符号而
+修复后基线：`npm run test:audit` **39/39 全绿**（修复前为 26/35，含多个因 VM 缺符号而
 超时/误报的脚本）。
 
 ## 仍然存在的设计债（按优先级）

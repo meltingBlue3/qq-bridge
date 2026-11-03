@@ -25,6 +25,7 @@ import * as routePolicy from '../src/route-policy.js';
 import * as inboundMessage from '../src/inbound-message.js';
 import * as jsonFile from '../src/json-file.js';
 import * as configModule from '../src/config.js';
+import * as httpUtils from '../src/http-utils.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
@@ -192,7 +193,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,

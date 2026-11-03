@@ -276,6 +276,7 @@ qq-bridge/
     route-policy.js     # HTTP 身份 × 路由授权策略（纯函数，默认拒绝）
     json-file.js        # JSON/文本原子读写（BOM、配置顶层校验、Windows rename 重试）
     config.js           # config.json 默认值、section 合并与归一化
+    http-utils.js       # 控制台安全响应头、JSON 请求体读取、Host/Origin 回环校验
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
     md-to-plain.js      # Markdown → QQ 纯文本
     self-test.js        # DSH 侧自测

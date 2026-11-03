@@ -18,6 +18,7 @@ import { buildInboundMessageBlock, buildMessageEnvelope, buildMessageList, neutr
 import { authorizeAgentRequest } from './route-policy.js';
 import { atomicWriteJson, atomicWriteText, readConfigObject, readJsonSafe } from './json-file.js';
 import { applyRoleInjectLimit, loadConfig, normalizeIdList, normalizeOwnerQQ, normalizeReasoningEffort, REASONING_EFFORT_DEFAULT, REASONING_EFFORT_OPTIONS, ROLE_INJECT_MAX_CHARS_DEFAULT } from './config.js';
+import { isAllowedHost, isAllowedOrigin, readJsonBody, SECURITY_HEADERS, sendJsonResponse } from './http-utils.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
@@ -2708,71 +2709,9 @@ async function main() {
         res.end(JSON.stringify({ ok: false, error: '无效的请求地址' }));
         return;
       }
-      const SECURITY_HEADERS = {
-        'X-Frame-Options': 'DENY',
-        'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'no-referrer'
-      };
-      const sendJson = (obj, status = 200) => {
-        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...SECURITY_HEADERS });
-        res.end(JSON.stringify(obj, null, 2));
-      };
-      const readBody = () => new Promise((resolve, reject) => {
-        const MAX_BODY_BYTES = 1_000_000;
-        const chunks = [];
-        let total = 0;
-        let settled = false;
-        let bodyTimer = null;
-        const fail = (status, message) => {
-          if (settled) return;
-          settled = true;
-          if (bodyTimer) clearTimeout(bodyTimer);
-          const err = new Error(message);
-          err.statusCode = status;
-          reject(err);
-        };
-        const done = (val) => {
-          if (settled) return;
-          settled = true;
-          if (bodyTimer) clearTimeout(bodyTimer);
-          resolve(val);
-        };
-        // 提前按 Content-Length 拒绝超限请求体
-        const declared = Number(req.headers['content-length']);
-        if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-          fail(413, '请求体过大（超过 1MB）');
-          return;
-        }
-        bodyTimer = setTimeout(() => fail(400, '请求体读取超时'), 30000);
-        req.on('data', (c) => {
-          if (settled) return;
-          const buf = Buffer.isBuffer(c) ? c : Buffer.from(c);
-          total += buf.length;
-          if (total > MAX_BODY_BYTES) {
-            req.pause();
-            fail(413, '请求体过大（超过 1MB）');
-            return;
-          }
-          chunks.push(buf);
-        });
-        req.on('end', () => {
-          if (settled) return;
-          const data = Buffer.concat(chunks).toString('utf8');
-          if (!data.trim()) { done({}); return; }
-          let parsed;
-          try { parsed = JSON.parse(data); } catch { fail(400, '请求体必须是合法 JSON'); return; }
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            fail(400, '请求体必须是 JSON 对象');
-            return;
-          }
-          done(parsed);
-        });
-        // 请求体超限/连接异常时也要结束等待，避免 handler 悬挂
-        req.on('error', () => fail(400, '请求体读取失败'));
-        req.on('aborted', () => fail(400, '请求体读取中断'));
-      });
+      // 安全响应头 / JSON 响应 / 请求体读取统一走 src/http-utils.js（可单测，不与路由耦合）。
+      const sendJson = (obj, status = 200) => sendJsonResponse(res, obj, status);
+      const readBody = () => readJsonBody(req);
       // 浏览器会自动请求 /favicon.ico，且**不带控制台令牌**。若让它落到下面的鉴权分支，
       // 每次打开控制台都会在 DevTools 里留一条 401 噪音（离线预览 fixture 早已用 204 处理，
       // 真实服务端此前与自己的 fixture 行为不一致）。这里在任何鉴权之前直接 204 收掉。
@@ -2790,8 +2729,7 @@ async function main() {
       // 用**实际绑定端口**而不是配置值：测试夹具用 consolePort: 0 让系统分配端口，
       // 配置里那个 0 不是请求里的 Host 端口。请求必然发生在 listen 之后，所以这里拿得到。
       const boundPort = server.address()?.port ?? port;
-      const allowedHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
-      if (!allowedHosts.includes(hostHeader.toLowerCase())) {
+      if (!isAllowedHost(hostHeader, boundPort)) {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
@@ -2828,13 +2766,9 @@ async function main() {
           return;
         }
         const origin = req.headers['origin'];
-        if (origin) {
-          let originHost = '';
-          try { originHost = new URL(String(origin)).host; } catch {}
-          if (![`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`].includes(originHost)) {
-            sendJson({ ok: false, error: '跨站请求被拒绝' }, 403);
-            return;
-          }
+        if (origin && !isAllowedOrigin(origin, boundPort)) {
+          sendJson({ ok: false, error: '跨站请求被拒绝' }, 403);
+          return;
         }
       }
       try {
