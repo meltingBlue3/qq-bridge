@@ -153,15 +153,40 @@ test('forward-media：登记后只抓已见过的；混合请求带 deniedCount 
 
 test('active-members：聚合 count/lastTime/isOwner，排除自己，按 count 排序 + limit', async () => {
   const h = harness();
-  const ok = await h.call('GET', '/api/socialV2/active-members?key=group:456&limit=1');
+  // 操作者视角（无令牌）：完整字段，验证聚合本身
+  const ok = await h.call('GET', '/api/socialV2/active-members?key=group:456&limit=1', {}, {});
   const m = ok.last.obj.members;
   assert.equal(m.length, 1);
   assert.equal(m[0].userId, '111', '小明 2 条 → 排第一');
   assert.equal(m[0].count, 2);
   assert.equal(m[0].lastTime, 9);
-  assert.equal(m[0].isOwner, true);
+  assert.equal(m[0].isOwner, true, '操作者视角（无令牌）保留管理员标记');
   const noKey = await harness().call('GET', '/api/socialV2/active-members');
   assert.equal(noKey.last.status, 400);
+});
+
+test('agent 视角：成员视图默认隐藏管理员身份；exposeUserId=false 时连 userId 一起隐藏', async () => {
+  // agent 调用（带令牌）：isOwner 被剥掉，userId 默认保留（拍一拍/点名需要）
+  const h = harness();
+  const agentView = await h.call('GET', '/api/socialV2/active-members?key=group:456&limit=5');
+  assert.equal(agentView.last.obj.members[0].isOwner, undefined, 'isOwner 不得暴露给 agent');
+  assert.equal(agentView.last.obj.members[0].userId, '111', 'userId 默认保留（工具需要）');
+  // 控制台调用（无令牌）：一切保留
+  const consoleView = await h.call('GET', '/api/socialV2/active-members?key=group:456&limit=5', {}, {});
+  assert.equal(consoleView.last.obj.members[0].isOwner, true);
+  assert.equal(consoleView.last.obj.members[0].userId, '111');
+
+  // group-members：role=owner/admin 是管理员身份，agent 视角剥掉
+  const h3 = harness();
+  const ok = await h3.call('GET', '/api/socialV2/group-members?key=group:456');
+  assert.equal(ok.last.obj.members[0].role, undefined, 'admin 身份不得暴露给 agent');
+  assert.equal(ok.last.obj.members[0].userId, '1');
+  const h4 = harness();
+  h4.deps.cfg.socialV2.privacy = { exposeUserId: false };
+  const hidden = await h4.call('GET', '/api/socialV2/group-members?key=group:456');
+  assert.equal(hidden.last.obj.members[0].userId, undefined, 'exposeUserId=false 时 userId 隐藏');
+  const consoleHidden = await h4.call('GET', '/api/socialV2/group-members?key=group:456', {}, {});
+  assert.equal(consoleHidden.last.obj.members[0].userId, '1', '开关只影响 agent 视角，不影响操作者');
 });
 
 test('group-members：仅 group: key；closed-agent 走 allowed 白名单；reserved2 走 v2SessionAllowed；WS 失败走 HTTP 兜底', async () => {
@@ -175,12 +200,15 @@ test('group-members：仅 group: key；closed-agent 走 allowed 白名单；rese
   const fallback = await h2.call('GET', '/api/socialV2/group-members?key=group:456');
   assert.equal(fallback.last.obj.ok, true);
   assert.equal(h2.calls.http.length, 1, 'WS 挂了走 onebotHttpAction 兜底');
+  // agent 视角：userId 默认保留、身份字段不存在
   assert.deepEqual(fallback.last.obj.members, [{ userId: '7', nickname: '兜底', card: '' }]);
   const h3 = harness();
   const ok = await h3.call('GET', '/api/socialV2/group-members?key=group:456');
   assert.equal(ok.last.obj.count, 2);
   assert.equal(ok.last.obj.returned, 2);
-  assert.equal(ok.last.obj.members[0].role, 'admin');
+  assert.equal(ok.last.obj.members[0].role, undefined, 'agent 视角隐藏 admin 身份');
+  const okConsole = await h3.call('GET', '/api/socialV2/group-members?key=group:456', {}, {});
+  assert.equal(okConsole.last.obj.members[0].role, 'admin', '操作者视角保留 role');
   const badPayload = harness();
   badPayload.deps.botRequest = async () => ({ data: 'not-a-list' });
   const bad = await badPayload.call('GET', '/api/socialV2/group-members?key=group:456');

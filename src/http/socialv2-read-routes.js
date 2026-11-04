@@ -31,6 +31,25 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     filterForwardMediaV2
   } = deps;
 
+  // ── agent 视角的成员视图 ────────────────────────────────────────────────────
+  // 带 x-agent-token 的调用（模型自己看）默认隐藏**管理员身份**（isOwner /
+  // role=owner|admin）：群名册里的管理员标记被模型复述出去，等于把权限结构
+  // 泄露给会话里的任何群友。userId 默认保留——拍一拍/点名工具需要它；
+  // cfg.socialV2.privacy.exposeUserId=false 时一并隐藏（行为对齐上游 #88）。
+  const isAgentCall = Boolean(req.headers['x-agent-token']);
+  const exposeUserId = cfg.socialV2?.privacy?.exposeUserId !== false;
+  const agentMemberView = (m) => {
+    if (!isAgentCall) return m;
+    const out = { ...m };
+    delete out.isOwner;
+    if (out.role === 'owner' || out.role === 'admin') delete out.role;
+    if (!exposeUserId) {
+      delete out.userId;
+      delete out.user_id;
+    }
+    return out;
+  };
+
   if (req.method === 'GET' && url.pathname === '/api/socialV2/message-detail') {
     const key = String(url.searchParams.get('key') ?? '').trim();
     const messageId = String(url.searchParams.get('messageId') ?? '').trim();
@@ -238,7 +257,7 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
       if (m.isOwner) cur.isOwner = true;
       map.set(key2, cur);
     }
-    const members = [...map.values()].sort((a, b) => b.count - a.count || b.lastTime - a.lastTime).slice(0, limit);
+    const members = [...map.values()].sort((a, b) => b.count - a.count || b.lastTime - a.lastTime).slice(0, limit).map(agentMemberView);
     sendJson({ ok: true, key, members });
     return true;
   }
@@ -284,7 +303,7 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
         nickname: truncateText(String(m?.nickname ?? ''), 40),
         card: truncateText(String(m?.card ?? ''), 40),
         ...(m?.role ? { role: String(m.role) } : {})
-      })).filter((m) => m.userId);
+      })).filter((m) => m.userId).map(agentMemberView);
       sendJson({ ok: true, key, count: raw.length, returned: members.length, truncated: raw.length > members.length, members });
     } catch (error) {
       log(`群成员查询失败 ${key}: ${error?.message ?? error}`);
