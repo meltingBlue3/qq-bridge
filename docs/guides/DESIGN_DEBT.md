@@ -144,6 +144,9 @@ vs 上游单体），二是上游已改为 PolyForm-Noncommercial 许可，复�
 | `450f6ea` | 群友可控文本入模前结构净化（`sanitizeUntrustedText`：【】降级/换行压空格/零宽剥离；落点在 compactModelMessage + compactModelData 任意层字符串） | #78 |
 | `a77f5e2` | web_search/web_fetch 结果套不可信数据外壳 + 6000 字符截断 | #82 |
 | `332a060` | agent 视角隐藏成员管理员身份（isOwner/role）；userId 默认保留（拍一拍/点名工具需要），`privacy.exposeUserId=false` 可隐藏 | #88（取舍：上游默认藏 userId 会打断工具链） |
+| `2d59678` | 发送队列**按会话分链**（`sendChains` Map）：跨会话并行互不阻塞、同会话五条路径严格保序、链尾清理；顺带 sendMessagesV2 失败也记 lastSendFailed | #83 |
+| `b2422b7` | AI 通道**发送前重查**静默/暂停/关闭（出站瞬间生效）；操作者通道不受限；auditAndSend 失败丢弃且不发通知 | 5551e74 |
+| `7c8027e` | 普通聊天并入 per-session 投递队列：提交顺序=到达顺序（修「后到文本先于带图消息」）；ack 语义保留 | 0ac4233 之二 |
 
 ### 有意跳过（理由）
 
@@ -155,11 +158,10 @@ vs 上游单体），二是上游已改为 PolyForm-Noncommercial 许可，复�
 
 ### 待吸收（下次继续，按价值排序）
 
-1. **按会话分链**（#83）：全局 `sendChain` 单链改 per-key——多群同时用互不阻塞，
-   同会话保序。注意夹具必须 use strict + 语音/表情路径「链建立即登记」（上游踩过坑）。
-2. **AI 发送前重查**（5551e74）：guard 补 silent/paused/enabled 的 AI 通道重查。
-3. **普通聊天并入 promptQueues**：修「后到文本先于图片提交」。
-4. **表情/黑话 scope 隔离**（#87）：跨会话信息流。
-5. **断线出站交付游标补发**（0ac4233，L）：需 modeKnown 防止 reserved2 文本当普通回复外泄。
-6. 小件：定时器限幅、DSH 端点运行时自愈、敏感检测伪装归一化（NFKC/零宽）、preset bundle 同步。
-7. 另行评估：qq-self-key 执行期会话绑定（把 key 从「模型自律」改为「exec.agent.id 派生」）。
+1. **表情/黑话 scope 隔离**（#87）：条目归属写入会话、读取只注入 global+当前会话；
+   旧数据无 scope 按 global 兼容。跨会话信息流（备注/黑话常带群号人名）。
+2. **断线出站交付游标补发**（0ac4233 之一，L）：持久化交付游标 + 重连快照补发
+   已完成回合；**必须**先做 modeKnown（真实模式确认前只暂存快照），否则 reserved2
+   内部文本会被当普通回复外泄。
+3. 小件：定时器限幅、DSH 端点运行时自愈、敏感检测伪装归一化（NFKC/零宽）、preset bundle 同步。
+4. 另行评估：qq-self-key 执行期会话绑定（把 key 从「模型自律」改为「exec.agent.id 派生」）。
