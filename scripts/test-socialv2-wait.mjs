@@ -124,6 +124,20 @@ test('同一会话并发等待 429；purpose 非法 400', async () => {
   assert.equal((await h.call('/api/socialV2/wait', { key: 'group:456', purpose: 'zzz' })).last.status, 400);
 });
 
+test('429 携带 retryAfterMs 倒计时与可执行提示（不诱导立刻重试）', async () => {
+  const h = harness();
+  // 租约 3 秒前建立，租约上限 15s ⇒ retryAfterMs ≈ 12s
+  h.deps.activeWaits.set('group:456', Date.now() - 3000);
+  const r = await h.call('/api/socialV2/wait', { key: 'group:456', timeoutMs: 100 });
+  assert.equal(r.last.status, 429);
+  assert.equal(r.last.obj.ok, false);
+  const retry = Number(r.last.obj.retryAfterMs);
+  assert.ok(Number.isFinite(retry) && retry > 0 && retry <= 15000, `retryAfterMs 应为租约剩余倒计时，实得 ${r.last.obj.retryAfterMs}`);
+  assert.match(r.last.obj.error, /不要立刻重试/);
+  assert.match(r.last.obj.hint, /沉睡前观察/);
+  assert.match(r.last.obj.hint, /不需要再发等待/);
+});
+
 test('非本组路由返回 false', async () => {
   const h = harness();
   assert.equal((await h.call('/api/socialV2/unread?key=group:456')).handled, false);

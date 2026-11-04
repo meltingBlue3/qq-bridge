@@ -66,7 +66,16 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     // 租约过期则视为残留（handler 异常退出没清干净），允许接管而不是永久 429。
     const leaseKey = canonicalV2Key(key) ?? key;
     if (activeWaits.has(leaseKey) && Date.now() - activeWaits.get(leaseKey) < activeWaitLeaseMs) {
-      sendJson({ ok: false, error: '该会话已有一个等待中的 qq_wait_for_messages，请等待它结束' }, 429);
+      // 429 必须可执行：告诉模型「多久后租约才可能释放」（租约到期倒计时），
+      // 并明确「立刻重试没有意义」——否则模型会把它当瞬时抖动马上重发，
+      // 在整个租约期内打转。沉睡前观察场景单独给一句出口：静候即可，不要补发等待。
+      const retryAfterMs = Math.max(0, activeWaits.get(leaseKey) + activeWaitLeaseMs - Date.now());
+      sendJson({
+        ok: false,
+        error: '该会话已有一个等待中的 qq_wait_for_messages，不要立刻重试（重试只会拿到同样的拒绝）',
+        retryAfterMs,
+        hint: '若你只是在完成沉睡前观察：静候即可，观察窗口会随时间自然届满，不需要再发等待。'
+      }, 429);
       return true;
     }
     const leaseStamp = Date.now();
