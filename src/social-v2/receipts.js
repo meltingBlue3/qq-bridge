@@ -19,6 +19,16 @@ function validSeq(seq) {
 }
 
 /**
+ * 取 modelSeenSeqs（readThrough 凭证集）。用鸭子类型而不是 instanceof Set：
+ * 审计 harness 在 VM 里跑 bridge，VM 域的 Set 不是宿主域的 Set，
+ * instanceof 会永远为假、把「都看过了」误判成「全都没看过」。
+ */
+function seenSetOf(st) {
+  const seen = st?.modelSeenSeqs;
+  return seen && typeof seen.has === 'function' ? seen : null;
+}
+
+/**
  * 记录一批「已展示给模型」的消息 seq（FIFO 去重、有界）。
  * messages 允许掺入 undefined/自消息；只记带合法 seq 的条目。
  */
@@ -73,7 +83,7 @@ export function isShownSeq(st, seq) {
 export function filterUnshownRecent(st, messages, { hideUnreadSeqs = null } = {}) {
   const list = Array.isArray(messages) ? messages : [];
   const shown = Array.isArray(st?.modelShownSeqs) ? st.modelShownSeqs : [];
-  const seenByModel = st?.modelSeenSeqs instanceof Set ? st.modelSeenSeqs : null;
+  const seenByModel = seenSetOf(st);
   const out = [];
   let excludedShown = 0;
   let excludedUnread = 0;
@@ -97,10 +107,12 @@ export function filterUnshownRecent(st, messages, { hideUnreadSeqs = null } = {}
 /**
  * 未读缓冲里「模型还没见过」的条数（会话方反馈③的口径来源）。
  * unreadCount 是缓冲总量（含已展示、等 mark_read 确认的）；这个数才是真正的新消息量。
+ * 调用方注意：要在 noteModelMessagesV2 **之前**取——登记回执之后再算恒为 0，
+ * 而「本次返回的就是你没见过的那些」才是模型需要的信息。
  */
 export function countUnseenUnread(st) {
   if (!st || !Array.isArray(st.unread)) return 0;
-  const seen = st.modelSeenSeqs instanceof Set ? st.modelSeenSeqs : null;
+  const seen = seenSetOf(st);
   if (!seen) return st.unread.length;
   return st.unread.filter((m) => !(validSeq(m?.seq) && seen.has(m.seq))).length;
 }

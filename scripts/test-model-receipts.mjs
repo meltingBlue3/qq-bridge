@@ -178,6 +178,32 @@ test('recent 路由：本次返回的会被登记，翻页 offset 不再重复�
   assert.equal(second.obj.excludedShownCount, 3);
 });
 
+test('unread 路由：newUnreadCount 只数调用时尚未展示的——缓冲未清也不虚报', async () => {
+  const h = routeHarness();
+  const st = h.deps.getSocialV2State('group:456');
+  st.recentMessages = [
+    { seq: 1, text: 'a' }, { seq: 2, text: 'b' }, { seq: 3, text: 'c' }
+  ];
+  st.unread = [{ seq: 1, text: 'a' }, { seq: 2, text: 'b' }, { seq: 3, text: 'c' }];
+  // 第一次读取：3 条全部展示并登记 → 本次调用时 3 条都没见过（返回的就是它们）
+  const first = await h.call('/api/socialV2/unread?key=group:456', { 'x-agent-token': 'tok' });
+  assert.deepEqual(first.obj.messages.map((m) => m.seq), [1, 2, 3]);
+  assert.equal(first.obj.unreadCount, 3);
+  assert.equal(first.obj.newUnreadCount, 3, '口径是「调用发生时没见过的」，与返回的消息一一对应');
+  assert.equal(first.obj.excludedShownCount, 0);
+  // 新到一条：缓冲 4 条，但模型只缺 1 条
+  st.unread.push({ seq: 4, text: 'd' });
+  st.recentMessages.push({ seq: 4, text: 'd' });
+  const second = await h.call('/api/socialV2/unread?key=group:456', { 'x-agent-token': 'tok' });
+  assert.deepEqual(second.obj.messages.map((m) => m.seq), [4], '默认读取只给没见过的');
+  assert.equal(second.obj.unreadCount, 4, '缓冲总量如实上报');
+  assert.equal(second.obj.newUnreadCount, 1, '这就是「显示 9 条其实就 1 条新的」的解法');
+  assert.equal(second.obj.excludedShownCount, 3);
+  // 显式 afterSeq 分页不受去重影响：仍能精确拿到旧窗口
+  const paged = await h.call('/api/socialV2/unread?key=group:456&afterSeq=0&limit=2', { 'x-agent-token': 'tok' });
+  assert.deepEqual(paged.obj.messages.map((m) => m.seq), [1, 2], '积压续读保持精确窗口');
+});
+
 // ── harness 端到端：快照回执闭环 ─────────────────────────────────────────
 test('唤醒快照投递后，下一回合快照的 recent 不再重复上回合内容', async () => {
   const h = await bridgeHarness();
@@ -200,6 +226,9 @@ test('唤醒快照投递后，下一回合快照的 recent 不再重复上回合
     for (const m of [...snap2.messages, ...snap2.recent]) {
       assert.equal(shownSeqs.has(m.seq), false, `seq ${m.seq} 上一回合已展示，不应重复下发`);
     }
+    // 会话方反馈③：两个计数口径并存——缓冲还在（没 mark_read），但内容不再重发。
+    assert.equal(snap2.unreadCount, st.unread.length, 'unreadCount 是缓冲总量');
+    assert.equal(snap2.newUnreadCount, 0, 'newUnreadCount 如实反映「都见过了」');
   } finally {
     await h.close();
   }

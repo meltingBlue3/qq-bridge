@@ -582,7 +582,7 @@ server.tool(
 
 server.tool(
   'qq_get_unread_messages',
-  '查看未读消息，不自动标记已读。默认只返回你还没见过的：快照/上次读取已展示但还没 mark_read 确认的会自动跳过（excludedShownCount 说明省略了多少条），所以它不会和快照重复。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序精确补读（分页不受去重影响）；从最早未读开始传 0。',
+  '查看未读消息，不自动标记已读。默认只返回你还没见过的：快照/上次读取已展示但还没 mark_read 确认的会自动跳过（excludedShownCount 说明省略了多少条），所以它不会和快照重复。unreadCount 是未读缓冲总量（含已展示给你、等 mark_read 确认的），newUnreadCount 是这次调用发生时你还没见过的条数（默认读取返回的就是它们）——判断「有没有新东西」看后者。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序精确补读（分页不受去重影响）；从最早未读开始传 0。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),

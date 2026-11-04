@@ -5,7 +5,7 @@
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
 
 import { slangVisibleInScope } from '../slang-learner.js';
-import { filterUnshownRecent, isShownSeq } from '../social-v2/receipts.js';
+import { countUnseenUnread, filterUnshownRecent, isShownSeq } from '../social-v2/receipts.js';
 
 /**
  * @returns {Promise<boolean>} true = 已处理
@@ -72,6 +72,8 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       wakeConfig: st.wakeConfig,
       wakeSafety: computeWakeSafetyV2(st.wakeConfig),
       unreadCount: st.unread.length,
+      // 会话方反馈③：缓冲总量 vs 模型没见过的，两个口径都给。
+      newUnreadCount: countUnseenUnread(st),
       recentCount: st.recentMessages.length,
       lastWakeReason: st.lastWakeReason,
       lastAiReplyAt: st.lastAiReplyAt
@@ -153,6 +155,7 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       enabledTools,
       replyTiming: replyTimingV2(st),
       unreadCount: st.unread.length,
+      newUnreadCount: countUnseenUnread(st),
       recentCount: st.recentMessages.length,
       currentWakeConfig: st.wakeConfig,
       wakeSafety: computeWakeSafetyV2(st.wakeConfig),
@@ -212,9 +215,13 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     }
     const messages = afterSeq === null ? baseUnread.slice(-limit)
       : st.unread.filter((m) => Number.isSafeInteger(m.seq) && m.seq > afterSeq).slice(0, limit);
+    // newUnreadCount 必须在登记回执**之前**取：模型要的是「这次调用时我有几条没见过」
+    // （本次返回的就是它们）；登记之后再算恒为 0，就没有信息量了。
+    const newUnreadCount = countUnseenUnread(st);
     const readThroughSeq = isAgent ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
     sendJson({
       ok: true, key, unreadCount: st.unread.length, messages, readThroughSeq,
+      newUnreadCount,
       ...(isAgent ? { excludedShownCount } : {})
     });
     return true;
@@ -296,7 +303,7 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     markReadCalledKeys.add(key);
     saveSocialV2State();
     log(`[reserved2] 控制台/工具标记 ${key} 未读已读：${markedCount} 条，已确认下一次唤醒配置`);
-    sendJson({ ok: true, key, markedCount, unreadCount: st.unread.length, readThroughSeq: readThroughSeqV2(st), wakeGuaranteed: computeWakeSafetyV2(st.wakeConfig).guaranteed, wakeSafety: computeWakeSafetyV2(st.wakeConfig), wakeConfig: st.wakeConfig });
+    sendJson({ ok: true, key, markedCount, unreadCount: st.unread.length, newUnreadCount: countUnseenUnread(st), readThroughSeq: readThroughSeqV2(st), wakeGuaranteed: computeWakeSafetyV2(st.wakeConfig).guaranteed, wakeSafety: computeWakeSafetyV2(st.wakeConfig), wakeConfig: st.wakeConfig });
     return true;
   }
 
@@ -446,7 +453,7 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     cancelReplyCheckV2(key); // AI 已主动设置新的唤醒配置，取消回复检查
     setupSleepTimerV2(key);
     log(`[reserved2] 更新唤醒配置 ${key}: mode=${next.mode} infinite=${next.infinite} sleepUntil=${next.sleepUntil ?? 'null'}`);
-    sendJson({ ok: true, key, markedCount, unreadCount: st.unread.length, readThroughSeq: readThroughSeqV2(st), wakeConfig: next, wakeSafety: computeWakeSafetyV2(next) });
+    sendJson({ ok: true, key, markedCount, unreadCount: st.unread.length, newUnreadCount: countUnseenUnread(st), readThroughSeq: readThroughSeqV2(st), wakeConfig: next, wakeSafety: computeWakeSafetyV2(next) });
     return true;
   }
 

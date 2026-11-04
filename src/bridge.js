@@ -44,7 +44,7 @@ import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from 
 import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
 import { applyRecallV2 } from './social-v2/recall.js';
 import { createForwardMediaRegistry } from './social-v2/forward-media-registry.js';
-import { isShownSeq, pruneShownSeqs, rememberShownSeqs } from './social-v2/receipts.js';
+import { countUnseenUnread, isShownSeq, pruneShownSeqs, rememberShownSeqs } from './social-v2/receipts.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -6489,6 +6489,9 @@ async function main() {
       now: localClockText(now),
       ...(newestAgo ? { newestAgo } : {}),
       unreadCount: st.unread.length,
+      // 会话方反馈③：unreadCount 是缓冲总量（含已展示、等 mark_read 确认的），
+      // newUnreadCount 才是模型真正没见过的——两个数都给，避免「9 条其实就 1 条新」的困惑。
+      newUnreadCount: countUnseenUnread(st),
       includedUnreadCount: 0,
       readThroughSeq: readThroughSeqV2(st),
       partial: pendingUnread.length > 0
@@ -6550,6 +6553,7 @@ async function main() {
     const meta = [
       `now="${snapshot.now ?? ''}"`,
       `unreadCount="${snapshot.unreadCount ?? 0}"`,
+      `newUnreadCount="${snapshot.newUnreadCount ?? 0}"`,
       `readThroughSeq="${snapshot.readThroughSeq ?? 0}"`,
       `partial="${snapshot.partial ? 'true' : 'false'}"`,
     ].join(' ');
@@ -6606,7 +6610,11 @@ async function main() {
     const preSleepLine = `【沉睡前强制等待】这是决定潜水收尾时的步骤，不是首回复的前置条件。除非对方明确说“不聊了/晚安/下了/拜拜”等结束语，否则每次设置潜水/下一次唤醒前，必须先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成一次沉睡前观察；回复前 purpose="reply" 的短静默不能代替这次完整观察。若 ${Math.round(preSleepMs / 60000)} 分钟内没人说话，返回 preSleepWaitSatisfied=true，可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看返回的 newMessages——判断不需要你参与就可以直接沉睡，若你选择参与回复，则下次想睡时需要重新等待观察窗口。【不要靠猜】：等待返回里的 canSleepNow/hint 就是闸门的判断结果——canSleepNow=true 立刻收尾（mark_read 或 set_wake_config）；false 时按 hint 给出的 timeoutMs 一次等满，别用更短的 timeoutMs 去凑（更短的等待不算观察，只会白等一轮）。\n\n`;
     const lastMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf);
     const lastAiMin = st.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(st.lastAiReplyAt)) / 60000)) : null;
-    const statusBits = [`未读 ${(st.unread || []).length} 条`];
+    const unreadTotal = (st.unread || []).length;
+    const unseenUnread = countUnseenUnread(st);
+    // 两个口径并存：缓冲总量 vs 没看过的。相同时只写一个数，避免啰嗦。
+    const unreadBit = unseenUnread >= unreadTotal ? `未读 ${unreadTotal} 条` : `未读 ${unreadTotal} 条（新 ${unseenUnread}，其余已展示过、mark_read 即可确认）`;
+    const statusBits = [unreadBit];
     if (lastMsg) {
       const lastAgo = describeAge(lastMsg.time, Date.now());
       statusBits.push(`最近一条来自 ${String(lastMsg.sender || '未知')}${lastAgo ? `（${lastAgo} 前）` : ''}：${String(lastMsg.text || lastMsg.plain || '').slice(0, 30)}`);

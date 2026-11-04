@@ -9,6 +9,7 @@
 // 同一会话只允许一个长轮询（租约按归一化 key 记账，过期可接管）。
 
 import { looksLikeUnfinished } from '../v2-wait.js';
+import { countUnseenUnread } from '../social-v2/receipts.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -225,6 +226,8 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     // `arrived` is recomputed against what this request may actually hand over,
     // so a suppressed buffer cannot report an arrival it is not allowed to show.
     const newMessages = replyWait ? pending : (arrived ? pending : []);
+    // newUnreadCount 在登记回执之前取：模型要的是「这次等待前我有几条没见过」。
+    const newUnreadCount = countUnseenUnread(st);
     const readThroughSeq = req.headers['x-agent-token'] ? noteModelMessagesV2(st, newMessages) : readThroughSeqV2(st);
     const lastNew = newMessages.length ? newMessages[newMessages.length - 1]
       : replyWait ? [...st.recentMessages].reverse().find((m) => m && !m.isSelf) : null;
@@ -265,7 +268,9 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
       } : {}),
       newMessages,
       readThroughSeq,
-      unreadCount: st.unread.length
+      // 会话方反馈③：unreadCount 是缓冲总量（含已展示待确认），newUnreadCount 才是没见过的。
+      unreadCount: st.unread.length,
+      newUnreadCount: countUnseenUnread(st)
     });
     return true;
   }
