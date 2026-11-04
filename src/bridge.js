@@ -41,6 +41,7 @@ import { handleSocialV2MiscRoutes } from './http/socialv2-misc-routes.js';
 import { handleSocialV2ReadRoutes } from './http/socialv2-read-routes.js';
 import { handleSlangRoutes } from './http/slang-routes.js';
 import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from './turn-lease.js';
+import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -4698,6 +4699,10 @@ async function main() {
   const messageMediaStore = new Map();
   // 二代会话见过的 forward id（有界，避免 recentMessages 滚动淘汰后无法读取刚见过的转发）
   const seenForwardIds = new Map(); // key -> Set<string>
+  // messageId 幂等去重（进程内 LRU）：OneBot 断线重连/网关重试会把同一消息重投，
+  // 重复入库会推高 seq 水位、unread 里出现两条一样的消息。容量 500 覆盖重连风暴窗口；
+  // 重启后 LRU 清空，由 appendSocialV2Message 里的「切片内查重」兜底。
+  const v2MessageIdDedupe = createMessageIdDedupe({ capacity: 500 });
 
   // 归一化“指定群友发言唤醒”名单：
   // - 只保留正整数 QQ 号（字符串形式），拒绝 null/对象/“null”/非法字符等脏数据；
@@ -5956,6 +5961,19 @@ async function main() {
     const st = getSocialV2State(key);
     const recentLimit = Number(cfg.socialV2?.context?.recentLimit) || 100;
     const unreadLimit = Number(cfg.socialV2?.context?.unreadLimit) || 30;
+    // messageId 幂等：重投的同一消息直接丢弃，不入库、不推 seq/unread 水位。
+    // 两层判定：① 本会话 recent/unread 切片已有同一 messageId（覆盖重启后的重放——
+    // 切片来自持久化状态）；② 进程内 LRU（覆盖已被切片滚出去的消息）。
+    // 拍一拍等合成条目 messageId 为空，不做去重（内容允许重复）。
+    if (messageId != null && String(messageId) !== '') {
+      const idText = String(messageId);
+      const inSlices = st.recentMessages.some((m) => m && m.messageId != null && String(m.messageId) === idText)
+        || st.unread.some((m) => m && m.messageId != null && String(m.messageId) === idText);
+      if (inSlices || !v2MessageIdDedupe.isFirstSeen(idText)) {
+        log(`[reserved2] ${key} messageId 重复投递已忽略（水位不动）: ${idText}`);
+        return;
+      }
+    }
     // 存储层的归一化**不能只留 kind/file/url/faceId**：reserved2 的图片/表情工具
     // （findMessageMedia → fetchOneBotImage / fetchMediaData）只从这里的产物取字段。
     // 丢了 emojiId/subType，fetchOneBotImage 的 isSticker 判定为假 ⇒ 市场/收藏表情会先走

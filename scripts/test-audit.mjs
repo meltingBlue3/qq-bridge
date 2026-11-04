@@ -26,6 +26,8 @@ const tests = [
   'test-audit-regressions.mjs',
   // 回合判忙租约纯函数层：断线恢复的「45s 宽限」语义（不再按满租约判忙）。
   'test-turn-lease.mjs',
+  // messageId 幂等去重：重投消息不入库、不推水位（模块直测 + R17 端到端）。
+  'test-message-id-dedupe.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。

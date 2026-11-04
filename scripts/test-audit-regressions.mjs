@@ -435,6 +435,33 @@ await test('R16 appendSocialV2Message 保留 kind/emojiId/summary/subType', asyn
   } finally { await h.close(); }
 });
 
+// ── R17. messageId 幂等：重投的同一消息不得重复入库 ─────────────────────────
+// OneBot 断线重连/网关重试会重投同一消息；旧实现照单全收 ⇒ seq 水位被推高、
+// unread 里出现两条一样的消息、AI 对同一句话回两遍。
+await test('R17 appendSocialV2Message 对重复 messageId 幂等（水位不动）', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const st = h.getSocialV2State('group:456');
+    h.appendSocialV2Message('group:456', '群友A', '你好', '你好', false, false, 'msg-2001', [], '999', []);
+    const seqAfterFirst = st.lastUnreadSeq;
+    assert.equal(st.unread.length, 1);
+    // 同一 messageId 重投：不入库、不推水位
+    h.appendSocialV2Message('group:456', '群友A', '你好', '你好', false, false, 'msg-2001', [], '999', []);
+    assert.equal(st.unread.length, 1, '重投不得重复入库');
+    assert.equal(st.recentMessages.length, 1, 'recent 切片同样只留一份');
+    assert.equal(st.lastUnreadSeq, seqAfterFirst, '重投不得推高 seq 水位');
+    // 新 messageId 照常入库
+    h.appendSocialV2Message('group:456', '群友B', '在吗', '在吗', false, false, 'msg-2002', [], '888', []);
+    assert.equal(st.unread.length, 2);
+    assert.equal(st.lastUnreadSeq, seqAfterFirst + 1);
+    // 无 id（拍一拍类合成条目）不去重：内容允许重复
+    h.appendSocialV2Message('group:456', '群友A', '拍了拍你', '拍了拍你', false, false, null, [], '999', []);
+    h.appendSocialV2Message('group:456', '群友A', '拍了拍你', '拍了拍你', false, false, null, [], '999', []);
+    assert.equal(st.unread.length, 4, '无 messageId 的合成条目不去重');
+  } finally { await h.close(); }
+});
+
 if (failures) {
   console.error(`\n${failures} 项失败`);
   process.exitCode = 1;
