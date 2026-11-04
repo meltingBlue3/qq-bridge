@@ -42,6 +42,7 @@ import { handleSocialV2ReadRoutes } from './http/socialv2-read-routes.js';
 import { handleSlangRoutes } from './http/slang-routes.js';
 import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from './turn-lease.js';
 import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
+import { applyRecallV2 } from './social-v2/recall.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -7026,6 +7027,64 @@ async function main() {
   }
 
   // 二代拍一拍（notify/poke）事件处理：写入消息流并按需唤醒。
+  /**
+   * 撤回事件（group_recall / friend_recall）：把已入库的原文换成占位。
+   *
+   * 为什么原地换而不是删除：seq 是未读水位与唤醒补发的锚点，删除会留空洞。
+   * 为什么只换入库不再通知：下次唤醒/读 unread 看到的就是占位——模型读得懂。
+   * 派生缓存必须同步清，否则原文会从旁路吐出：
+   *   · replyInfoCache（引用解析缓存，key 形如 kind:convId:messageId）；
+   *   · messageMediaStore（一代媒体缓存；二代媒体在消息对象上，已被占位替换清空）；
+   *   · seenForwardIds（转发读取白名单，防「撤回了还能读转发原文」）。
+   */
+  function handleRecallNotice(event) {
+    try {
+      const messageId = event?.message_id;
+      if (messageId == null || String(messageId) === '') return;
+      const idText = String(messageId);
+      let replaced = 0;
+      let hitKey = null;
+      const forwardIds = [];
+      // 撤回事件不带我们这边的会话 key（群号前导零/私聊归属都可能有出入），
+      // 直接扫全会话按 messageId 命中——个人规模下会话数很小，扫一遍最稳。
+      for (const [key, st] of socialV2.conversations.entries()) {
+        const result = applyRecallV2(st, idText);
+        if (result.replaced > 0) {
+          replaced += result.replaced;
+          hitKey = key;
+          forwardIds.push(...result.forwardIds);
+        }
+      }
+      // 引用解析缓存：按 messageId 后缀清（命中过的引用不能再解析出原文）。
+      for (const cacheKey of [...replyInfoCache.keys()]) {
+        if (cacheKey.endsWith(':' + idText)) replyInfoCache.delete(cacheKey);
+      }
+      // 一代媒体缓存：按事件派生的会话 key 清（二代不经过这里）。
+      const derivedKeys = [];
+      if (event.group_id != null) derivedKeys.push(convKey('group', String(event.group_id)));
+      if (event.user_id != null) derivedKeys.push(convKey('private', String(event.user_id)));
+      for (const dkey of derivedKeys) {
+        const store = messageMediaStore.get(dkey);
+        if (store instanceof Map) {
+          store.delete(idText);
+          const numeric = Number(messageId);
+          if (Number.isSafeInteger(numeric)) store.delete(numeric);
+        }
+      }
+      // 转发白名单：被撤回消息带出的 forward id 全部失效。
+      if (hitKey && forwardIds.length) {
+        const set = seenForwardIds.get(hitKey);
+        if (set) for (const fid of forwardIds) set.delete(fid);
+      }
+      if (replaced > 0) {
+        saveSocialV2State();
+        log(`[reserved2] ${hitKey ?? '?'} 已处理撤回事件（${replaced} 条换为占位）: ${idText}`);
+      }
+    } catch (error) {
+      log('处理撤回事件出错:', error?.message ?? error);
+    }
+  }
+
   async function handlePokeNotice(event) {
     if (!event || event.sub_type !== 'poke') return;
     const selfId = event.self_id;
@@ -7631,6 +7690,13 @@ async function main() {
   bot.onNotice('notify', async (event) => {
     try { await handlePokeNotice(event); } catch (error) { log('处理拍一拍事件出错:', error?.message ?? error); }
   });
+  // 撤回事件订阅：注册失败不影响主链路（不同 SDK 版本的订阅方法可能不同）。
+  try {
+    bot.onNotice('group_recall', async (event) => { try { handleRecallNotice(event); } catch (error) { log('处理群撤回出错:', error?.message ?? error); } });
+    bot.onNotice('friend_recall', async (event) => { try { handleRecallNotice(event); } catch (error) { log('处理好友撤回出错:', error?.message ?? error); } });
+  } catch (error) {
+    log(`（撤回事件订阅不可用，撤回消息将保留原文：${error?.message ?? error}）`);
+  }
 
   // ── 上游健康：任何事件包都算「SnowLuma 还活着」，心跳还额外带接收链路健康度 ──
   // 用 onEvent 挂一个**旁路**订阅（不影响主链路）：

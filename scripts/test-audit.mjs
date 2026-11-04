@@ -28,6 +28,8 @@ const tests = [
   'test-turn-lease.mjs',
   // messageId 幂等去重：重投消息不入库、不推水位（模块直测 + R17 端到端）。
   'test-message-id-dedupe.mjs',
+  // 撤回事件：入库占位替换（保 seq/清媒体转发）+ bridge 接线的缓存清理。
+  'test-socialv2-recall.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。
