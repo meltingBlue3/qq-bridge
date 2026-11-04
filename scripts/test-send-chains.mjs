@@ -94,3 +94,36 @@ test('sendMessagesV2 失败路径仍然回滚记账且不炸链（部分成功�
     assert.ok(h.calls.sent.some((m) => m.text === '恢复后的消息'));
   } finally { await h.close(); }
 });
+
+// ── AI 通道发送前重查：静默 / 暂停 / 关闭，出站瞬间生效 ─────────────────────
+test('AI 发送前重查：链排队期间切暂停/关闭，AI 出站被拦；操作者通道不受限', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    h.socialV2.paused = true;
+    await assert.rejects(h.sendMessagesV2('group:456', ['暂停期的消息'], []),
+      /二代 AI 活动已被暂停/, '暂停后 AI 出站必须被拦');
+    // 操作者通道（sendToQQ 不带 ai）：不受暂停约束
+    await h.sendToQQ('group:456', '操作者消息照常');
+    assert.ok(h.calls.sent.some((m) => m.text === '操作者消息照常'));
+    h.socialV2.paused = false;
+    h.cfg.socialV2.enabled = false;
+    await assert.rejects(h.sendMessagesV2('group:456', ['关闭后的消息'], []),
+      /二代功能已关闭/, '关闭后 AI 出站必须被拦');
+  } finally { await h.close(); }
+});
+
+test('AI 发送前重查：静默模式（role state 文件）拦截群聊 AI 出站，owner 私聊例外', async () => {
+  const h = await bridgeHarness({
+    files: { 'state/current-role.json': { role: null, mode: 'silent' } }
+  });
+  try {
+    h.setMode('reserved2');
+    await assert.rejects(h.sendMessagesV2('group:456', ['静默期的消息'], []),
+      /静默模式已开启/, '静默下 AI 群聊出站必须被拦');
+    // owner 私聊例外：照常可发（sendMessagesV2 → onebotSend 走 fetch，落 calls.http）
+    await h.sendMessagesV2('private:123', ['主人的私聊'], []);
+    assert.ok(h.calls.http.some((c) => String(c?.body?.message?.[0]?.data?.text ?? '') === '主人的私聊'),
+      'owner 私聊不受静默限制');
+  } finally { await h.close(); }
+});

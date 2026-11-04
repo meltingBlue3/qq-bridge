@@ -1215,7 +1215,7 @@ async function main() {
     }
     const sendPath = processed.path;
 
-    const assertSendAllowed = guard ? captureSendGuard(key) : null;
+    const assertSendAllowed = guard ? captureSendGuard(key, { ai: true }) : null;
     const [kind, id] = key.split(':');
     const recordSegment = { type: 'record', data: { file: sendPath } };
     let resolveSend;
@@ -1379,7 +1379,7 @@ async function main() {
 
   // 发送一个收藏表情（按 emoji_id/url/md5 解析，发图片段）。
   async function sendStickerV2(key, stickerRef, options = {}) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     // 发送前强制同步一次，确保“刚新增的表情能立即用、刚删除的表情不会继续发”。
     const synced = await syncStickerLibrary(true);
     const entry = findSticker(synced?.entries ?? stickerEntries, stickerRef);
@@ -1489,7 +1489,7 @@ async function main() {
 
   // 收藏聊天里的一张表情（add_custom_face），并按 AI 看到的含义写简短备注（modify_custom_face）。
   async function collectStickerV2(key, messageRef, remark) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const st = getSocialV2State(key);
     const found = (st.recentMessages || []).find((m) => m && (String(m.seq) === String(messageRef) || (m.messageId && String(m.messageId) === String(messageRef))));
     if (!found) throw new Error('找不到这条消息，请确认 messageId/seq 有效且属于当前会话');
@@ -3888,7 +3888,7 @@ async function main() {
   // 分条发送：与 sendToQQ 共用同一会话分链，严格顺序；条间随机间隔，
   // 有概率使用长间隔（错落感）；最后一条后不再 sleep。
   function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
     let min, max, longProb = 0, longMin = 0, longMax = 0;
     if (typeof socialCfgOrMin === 'object' && socialCfgOrMin !== null) {
@@ -4481,7 +4481,7 @@ async function main() {
   }
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
     const sent = [];
     const failed = [];
@@ -4527,13 +4527,21 @@ async function main() {
   }
 
   // 入队校验无法约束排队等待期间的权限变化，每条消息临近实际发送时再次校验。
-  function captureSendGuard(key) {
+  // opts.ai=true：AI 通道在出站瞬间还要重查「静默/暂停/关闭」——capture 发生在
+  // 进链之前，管理员在链排队期间切静默/暂停，旧实现照发不误（权限撤销晚一步）。
+  // 操作者通道（控制台试发/CLI/语音操作者路径）不传 ai，不受这三个开关约束。
+  function captureSendGuard(key, opts = {}) {
     const policy = sessionPolicy(key);
     const sessionId = state.sessions[key];
     return () => {
       if (!isSessionAllowedInCurrentMode(key) || policy !== sessionPolicy(key)
           || (sessionId && state.sessions[key] !== sessionId)) {
         throw new Error('发送已取消：会话、模式或白名单已变化');
+      }
+      if (opts.ai) {
+        if (shouldBlockSilentReply(key)) throw new Error('发送已取消：静默模式已开启（仅管理员私聊例外）');
+        if (currentMode === 'reserved2' && socialV2.paused) throw new Error('发送已取消：二代 AI 活动已被暂停');
+        if (cfg.socialV2?.enabled === false) throw new Error('发送已取消：二代功能已关闭');
       }
     };
   }
@@ -4546,6 +4554,15 @@ async function main() {
 
   // 统一出站消息：先完整文本审计，再发送。返回是否真的发出。
   async function auditAndSend(key, text) {
+    // AI 回复的发送前重查：进链后管理员可能已切静默/暂停。失败按「未发出」
+    // 处理且**不发拦截通知**——静默下连通知都不该出现在群里。
+    if (shouldBlockSilentReply(key)
+        || (currentMode === 'reserved2' && socialV2.paused)
+        || cfg.socialV2?.enabled === false) {
+      log(`⚠️ 回复发送前重查未通过，已丢弃 (${key})`);
+      appendActivity(`${key} 回复发送前重查未通过（静默/暂停/关闭），已丢弃`);
+      return false;
+    }
     const hasKnownToken = tokenFragments.test(String(text ?? ''));
     if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
       log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);

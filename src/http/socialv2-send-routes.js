@@ -329,9 +329,10 @@ export async function handleSocialV2SendRoutes({ req, url, sendJson, readBody, d
     }
     st.sendTimes.push(now);
     if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
-    // 成员校验是异步的（要问 OneBot）；期间操作者可能切模式/改白名单/开静默。
+    // 成员校验是异步的（要问 OneBot）；期间操作者可能切模式/改白名单/开静默/暂停。
     // 拍一拍此前完全没有发送守卫，这里补上：真正发之前再确认一次。
-    const sendGuard = captureSendGuard(key);
+    // { ai: true }：拍一拍是 AI 通道动作，出站瞬间还要重查静默/暂停/关闭。
+    const sendGuard = captureSendGuard(key, { ai: true });
     try {
       sendGuard();
       if (shouldBlockSilentReply(key)) {
