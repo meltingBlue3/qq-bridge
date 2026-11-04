@@ -118,3 +118,48 @@ wake-scheduler），bridge.js 剩余部分是消息管道、prompt 构建与 DSH
 `dsh plugin --profile web install` 步骤会以退出码 1 跳过——不影响使用，
 脚本已手动物化两层 junction（`~/.dsh/plugins/<name>` 与 profile `node_modules/<name>`），
 形态与 install 结果一致。
+
+## 上游更新吸收（2026-11-04，只取行为不搬代码）
+
+上游 `v0.2.1-r2`（a49877f..upstream/main，70 提交）做了一轮大安全审计。本仓库按
+「**只吸收行为/功能点，实现全部自己写**」的原则逐项移植——一是架构不同（26 个深模块
+vs 上游单体），二是上游已改为 PolyForm-Noncommercial 许可，复制代码会有许可传染。
+侦察结论存档：跳过 #118（角色卡按节奏注入）——我们走 `qq_persona` system prompt
+全卡注入，模型每回合见完整卡，上游要解决的「人设只给名字」问题在我们的架构下不存在。
+
+### 已落地（每项独立提交 + 直接单测）
+
+| 提交 | 内容 | 对应上游 |
+| --- | --- | --- |
+| `07ce38a` | wait 429 带 `retryAfterMs` 倒计时 + 「不要立刻重试」+ 沉睡观察出口提示 | #24 剩余项 |
+| `1eb5f3d` | wake-config 的 `batchWindowMs` 不传时跟随全局（不再被会话旧值钉死） | #93 之二 |
+| `1458aad` | 断线恢复的回合只保留 45s 忙碌宽限（`src/turn-lease.js`）；不再重启后按满租约判忙 | #93 之一 |
+| `a332fde` | messageId 幂等入库（切片查重 + 进程内 LRU 500，`src/social-v2/message-id-dedupe.js`） | #84 之一 |
+| `c5c82d4` | 繁忙积压的**点名类**唤醒（@/私聊/名字/拍一拍）已读也补发（已读≠已回应）；无效暂存条目丢弃续取 | eca88d5 之一 |
+| `6d31743` | 撤回事件（group_recall/friend_recall）：入库消息原地换占位（保 seq），清引用/媒体/转发三个派生缓存（`src/social-v2/recall.js`） | #84 之二 |
+| `38a613f` | `qq_get_prompt` 的 role.hint 返回真实卡文（原来是「请调工具却拿不到」的死胡同）；config 示例 maxInjectChars 对齐 8000 | b8199c2 |
+| `295912f` | 令牌出站审计改**片段级匹配**（`src/token-fragment.js`，12 字符滑窗）：拆条发令牌也拦得住 | #79 |
+| `eccebdf` | 挂起提问只消费管理员消息（owner 门）；预设补【会话隔离】硬规则 | #86 |
+| `a5a4d34` | 媒体抓取端口白名单（80/443/8080/8443，重定向每跳复检）+ forward-media **会话登记**（`src/social-v2/forward-media-registry.js`，只抓本会话见过的媒体） | #85 |
+| `450f6ea` | 群友可控文本入模前结构净化（`sanitizeUntrustedText`：【】降级/换行压空格/零宽剥离；落点在 compactModelMessage + compactModelData 任意层字符串） | #78 |
+| `a77f5e2` | web_search/web_fetch 结果套不可信数据外壳 + 6000 字符截断 | #82 |
+| `332a060` | agent 视角隐藏成员管理员身份（isOwner/role）；userId 默认保留（拍一拍/点名工具需要），`privacy.exposeUserId=false` 可隐藏 | #88（取舍：上游默认藏 userId 会打断工具链） |
+
+### 有意跳过（理由）
+
+- **#118 角色卡节奏注入**：我们的人格卡走 `{{qq_persona}}` system prompt 注入，每回合
+  全卡在场、无历史重复注入可省；移植反而把卡拉回消息正文，是退步。
+- **CI/治理类**（LICENSE 换非商用、SECURITY.md、issue 模板、PR 守护）：个人 fork 不需要。
+- **stop-bridge-instance.mjs**：本机单实例 + start.bat 守护，无双实例风险面。
+- **6455d60/24e29ba**：其父功能（会话绑定/表情 scope fail-closed）未在本仓库，单独做无意义。
+
+### 待吸收（下次继续，按价值排序）
+
+1. **按会话分链**（#83）：全局 `sendChain` 单链改 per-key——多群同时用互不阻塞，
+   同会话保序。注意夹具必须 use strict + 语音/表情路径「链建立即登记」（上游踩过坑）。
+2. **AI 发送前重查**（5551e74）：guard 补 silent/paused/enabled 的 AI 通道重查。
+3. **普通聊天并入 promptQueues**：修「后到文本先于图片提交」。
+4. **表情/黑话 scope 隔离**（#87）：跨会话信息流。
+5. **断线出站交付游标补发**（0ac4233，L）：需 modeKnown 防止 reserved2 文本当普通回复外泄。
+6. 小件：定时器限幅、DSH 端点运行时自愈、敏感检测伪装归一化（NFKC/零宽）、preset bundle 同步。
+7. 另行评估：qq-self-key 执行期会话绑定（把 key 从「模型自律」改为「exec.agent.id 派生」）。
