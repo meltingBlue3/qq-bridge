@@ -463,6 +463,30 @@ await test('R17 appendSocialV2Message 对重复 messageId 幂等（水位不动�
   } finally { await h.close(); }
 });
 
+// ── R18. 令牌片段级出站审计：拆条也拦得住 ───────────────────────────────────
+// 模型被提示词鼓励拆条发长文本；旧实现整串 includes，令牌拆两条就完全绕过。
+await test('R18 出站文本含令牌片段（≥12 连续字符）必须被拦截', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const st = h.getSocialV2State('group:456');
+    const token = st.agentToken;
+    assert.ok(token && token.length >= 12, '夹具会话必须已登记 token');
+    assert.ok(h.KNOWN_AGENT_TOKENS.has(token), 'token 必须在脱敏集合里');
+    const before = h.calls.sent.length;
+    const sent1 = await h.auditAndSend('group:456', `帮我记一下这个：${token.slice(0, 15)}`);
+    assert.equal(sent1, false, '含令牌前 15 字符残段的文本必须被拦（旧实现抓不到）');
+    const sent2 = await h.auditAndSend('group:456', `后半段：${token.slice(-15)}`);
+    assert.equal(sent2, false, '后 15 字符残段同样被拦');
+    // 被拦的**原文**不得出站（拦截通知本身按配置发送，是既有设计）
+    const outTexts = h.calls.sent.slice(before).map((m) => String(m.text ?? ''));
+    assert.equal(outTexts.length, 2, '两条拦截通知（interceptNotify 默认开）');
+    assert.ok(outTexts.every((t) => !t.includes(token.slice(0, 12))), '原文残段不得出现在任何出站消息里');
+    const ok = await h.auditAndSend('group:456', '不含令牌的普通回复照常发送');
+    assert.equal(ok, true, '普通文本不受影响');
+  } finally { await h.close(); }
+});
+
 if (failures) {
   console.error(`\n${failures} 项失败`);
   process.exitCode = 1;

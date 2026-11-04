@@ -65,6 +65,7 @@ import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
+import { createTokenFragmentMatcher } from './token-fragment.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage, describeAge } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
@@ -373,6 +374,10 @@ const DIRECTION_HINT = '注意：消息里的 [引用 某人：...] 表示这句
 
 // 已知的二代 agent token 集合：日志/活动/出站文本统一脱敏，防止令牌被模型泄露到 QQ。
 const KNOWN_AGENT_TOKENS = new Set();
+// 令牌「片段级」匹配器：模型被鼓励拆条发长文本，整串 includes 抓不住拆开的令牌。
+// 对每个已知 token 预生成 12 字符滑窗；出站/日志文本的任意滑窗命中即拦截/脱敏。
+// 集合增删后必须 tokenFragments.sync(KNOWN_AGENT_TOKENS)（remember/forget 末尾已接）。
+const tokenFragments = createTokenFragmentMatcher();
 
 // 会话 → 该会话「当前代 + 上一代」agentToken 的索引（见 rememberAgentToken）。
 //
@@ -412,6 +417,7 @@ function rememberAgentToken(key, token) {
       if (!live.has(old)) KNOWN_AGENT_TOKENS.delete(old);
     }
   }
+  tokenFragments.sync(KNOWN_AGENT_TOKENS);
 }
 
 /** 会话被彻底移除（重置/清空工作区/退订）时，连同它的 token 一起从脱敏集合摘掉。 */
@@ -420,6 +426,7 @@ function forgetAgentToken(key) {
   if (!prev) return;
   for (const tk of prev) KNOWN_AGENT_TOKENS.delete(tk);
   CONVERSATION_TOKENS.delete(key);
+  tokenFragments.sync(KNOWN_AGENT_TOKENS);
 }
 
 // 读取 DSH 模型能力的在途 Promise：withTimeout 只做 Promise.race，不会取消底层 RPC，
@@ -437,10 +444,7 @@ function redactSensitiveText(text) {
     const flags = SENSITIVE_RE.flags.includes('g') ? SENSITIVE_RE.flags : SENSITIVE_RE.flags + 'g';
     raw = raw.replace(new RegExp(SENSITIVE_RE.source, flags), '***');
   } catch {}
-  for (const token of KNOWN_AGENT_TOKENS) {
-    if (token && raw.includes(token)) raw = raw.split(token).join('***');
-  }
-  return raw;
+  return tokenFragments.redact(raw);
 }
 
 // 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。
@@ -1005,7 +1009,7 @@ async function main() {
    */
   function assertOutboundAuditOk(key, subject) {
     const text = String(subject ?? '');
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && text.includes(t));
+    const hasKnownToken = tokenFragments.test(text);
     if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
       log(`⚠️ 语音发送被安全策略拦截 (${key})：${hasKnownToken ? '文件名含会话令牌' : '文件名疑似含敏感信息'}`);
       appendActivity(`${key} [voice] 发送被拦截（文件名疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
@@ -3673,11 +3677,7 @@ async function main() {
   // QQ 发送队列（顺序发送 + 间隔，避免触发频率限制）
   let sendChain = Promise.resolve();
   function redactKnownTokensOnly(text) {
-    let s = String(text ?? '');
-    for (const token of KNOWN_AGENT_TOKENS) {
-      if (token && s.includes(token)) s = s.split(token).join('***');
-    }
-    return s;
+    return tokenFragments.redact(String(text ?? ''));
   }
 
   // 最近一次发送是否全部成功（按 key）。调用方据此决定要不要刷新「我发过言了」的时间戳 ——
@@ -3922,7 +3922,7 @@ async function main() {
       segments.push({ type: 'at', data: { qq: at } });
     }
     const rawMessage = String(message ?? '');
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && rawMessage.includes(t));
+    const hasKnownToken = tokenFragments.test(rawMessage);
     if (hasKnownToken) {
       log(`发送内容包含会话令牌，已阻止发送 (${kind}:${id})`);
       throw new Error('发送内容包含会话令牌，已阻止发送');
@@ -4517,7 +4517,7 @@ async function main() {
 
   // 统一出站消息：先完整文本审计，再发送。返回是否真的发出。
   async function auditAndSend(key, text) {
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && String(text ?? '').includes(t));
+    const hasKnownToken = tokenFragments.test(String(text ?? ''));
     if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
       log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);
       appendActivity(`${key} agent 回复被拦截（疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
@@ -7450,7 +7450,7 @@ async function main() {
                   continue;
                 }
                 // 审计（对完整文本执行，避免截断漏判；这里只判断，不发送，避免双重发送）
-                const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && plain.includes(t));
+                const hasKnownToken = tokenFragments.test(plain);
                 if (shouldAuditKey(key) && (SENSITIVE_RE.test(plain) || hasKnownToken)) {
                   log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);
                   appendActivity(`${key} agent 回复被拦截（疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
