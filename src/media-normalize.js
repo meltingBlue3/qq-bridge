@@ -35,6 +35,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveFfmpeg } from './voice-core.js';
+import { gifMosaic } from './media/gif-mosaic.js';
 
 /** 默认值集中一处，bridge.js 只做 config 覆盖（见 modelMediaLimits）。 */
 export const MEDIA_DEFAULTS = Object.freeze({
@@ -392,16 +393,38 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
           note: `动图 ${layout.totalFrames} 帧/${seconds}s，已抽 ${layout.sampleFrames} 帧拼成 ${layout.cols}×${layout.rows} 网格，行优先 左上→右下；原图 ${(bytes / 1024 / 1024).toFixed(2)}MB`
         };
       }
-      // 拼图失败（没 ffmpeg / 超时 / 还是太大）：退化到「能看多少算多少」。
+      // ── 纯 JS 兜底（会话方反馈④）─────────────────────────────────
+      // ffmpeg 缺失/超时/输出超限时，用零依赖的 GIF 解码 + PNG 编码完成同一次拼图，
+      // 而不是退化成「只给首帧」——动图表情包不能再因为没装 ffmpeg 而废掉。
+      const mosaicWhy = run.ok ? '输出仍超限' : run.error;
+      let jsWhy = null;
+      if (info.format === 'gif') {
+        const js = await gifMosaic(buf, {
+          cols: layout.cols, rows: layout.rows, tileWidth,
+          totalFrames: layout.totalFrames, sampleFrames: layout.sampleFrames
+        });
+        if (js.ok && js.buffer.length <= maxBytes) {
+          const seconds = (layout.durationMs / 1000).toFixed(1);
+          return {
+            ok: true,
+            buffer: js.buffer,
+            mimeType: 'image/png',
+            // 这段文字会原样出现在工具结果里，不要用嵌套括号。
+            note: `动图 ${layout.totalFrames} 帧/${seconds}s，已抽 ${js.framesUsed} 帧拼成 ${layout.cols}×${layout.rows} 网格，行优先 左上→右下；纯 JS 解码，未走 ffmpeg；原图 ${(bytes / 1024 / 1024).toFixed(2)}MB`
+          };
+        }
+        jsWhy = js.error;
+      }
+      // 拼图彻底失败（ffmpeg 与纯 JS 都不行）：退化到「能看多少算多少」。
       if (bytes <= maxBytes) {
         return {
           ok: true,
           buffer: buf,
           mimeType: mimeType || 'image/gif',
-          note: `动图 ${layout.totalFrames} 帧（抽帧拼图失败：${run.ok ? '输出仍超限' : run.error}，只提供首帧）`
+          note: `动图 ${layout.totalFrames} 帧（抽帧拼图失败：ffmpeg ${mosaicWhy}${jsWhy ? `；纯 JS ${jsWhy}` : ''}，只提供首帧）`
         };
       }
-      return { ok: false, error: `动图 ${(bytes / 1024 / 1024).toFixed(2)}MB 无法压缩（${run.ok ? '输出仍超限' : run.error}）` };
+      return { ok: false, error: `动图 ${(bytes / 1024 / 1024).toFixed(2)}MB 无法压缩（ffmpeg ${mosaicWhy}${jsWhy ? `；纯 JS ${jsWhy}` : ''}）` };
     }
 
     // action === 'shrink'：静态图降采样 + 重编码，最多试三轮（逐步缩小尺寸/降质量）。

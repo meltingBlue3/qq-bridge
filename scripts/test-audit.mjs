@@ -36,6 +36,8 @@ const tests = [
   'test-token-fragment.mjs',
   // 媒体抓取端口白名单 + forward-media 会话登记（双层 SSRF 边界）。
   'test-media-ports.mjs', 'test-forward-media-registry.mjs',
+  // 纯 JS GIF 抽帧拼图（会话方反馈④）：没装 ffmpeg 动图表情不再只剩首帧。
+  'test-gif-mosaic.mjs',
   // 按会话分链：跨会话并行互不阻塞、同会话严格保序、链尾清理 + AI 发送前重查。
   'test-send-chains.mjs',
   // 消息寻址统一（会话方反馈②）：id/seq 双寻址的文案契约 + detail 路由按 seq 命中的行为钉。
