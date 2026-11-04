@@ -97,3 +97,24 @@ wake-scheduler），bridge.js 剩余部分是消息管道、prompt 构建与 DSH
 3. 新增 `bridge.js` 顶层 import 时，同步更新 `scripts/audit-bridge-harness.mjs` 的
    VM 注入（直到 P0 完成）；否则会在测试里表现为 `xxx is not defined`。
 4. 纯函数/文件 I/O 优先放进独立 `src/*.js`，测试直接 `import`，不要再塞进 `main()`。
+
+## 仓库布局与协作（fork 说明，2026-11-04）
+
+本仓库是 `Derpyu520/qq-bridge` 的 fork，由 Neukas（GitHub: meltingBlue3）维护自己的路线：
+
+- **origin** → `github.com/meltingBlue3/qq-bridge`（自己的 fork，推送目标）
+- **upstream** → `github.com/Derpyu520/qq-bridge`（原作者，只 fetch 用来对比/吸收更新）
+- **main** = 自己的主路线（fork 时按本地 main 强推覆盖，**不追上游 main**）
+- **fix/design-debt** = 2026-11 的 P0 拆分线（26 个深模块、`test:audit` 64/64、
+  真实桥接实测通过）。日常魔改从这条线拉开发分支。
+
+⚠️ 与上游的关系：fork 后上游又前进了 ~70 个提交，且双方改过同一批文件
+（上游把人格注入也重构了，本仓库的 `plugins/qq-persona` 与配套 preset 在上游已不存在；
+本仓库 prompt 变量名为 `qq_persona`——DSH 0.2.x 起强制全小写 snake_case）。
+合并上游是一次有冲突的正式工程，**不要顺手 merge**；需要时单独开一轮，
+重点比对：人格注入方式、`plugins/` 三个 bundle、MCP 版本与工具清单、表情库。
+
+另：`dsh` CLI 未装进 PATH，`scripts/setup-dsh.mjs` 里的
+`dsh plugin --profile web install` 步骤会以退出码 1 跳过——不影响使用，
+脚本已手动物化两层 junction（`~/.dsh/plugins/<name>` 与 profile `node_modules/<name>`），
+形态与 install 结果一致。
