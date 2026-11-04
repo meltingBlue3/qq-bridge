@@ -1,7 +1,9 @@
 // Exercise real bridge HTTP handlers and prompt delivery with isolated files,
 // fixture-only QQ/DSH peers, and no production process or credentials.
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 
 const KEY = 'group:456';
@@ -467,8 +469,14 @@ await test('offline wake replay builds a fresh snapshot with the current session
   const content = h.calls.prompts[0].content.map((part) => part.text || '').join('\n');
   assert.ok(content.includes('queued initial message'));
   assert.ok(content.includes('queued later message'));
-  assert.ok(content.includes(st.agentToken));
+  // N2：令牌随 persona 载荷进 system（投递前同步、用轮换后的新令牌），用户消息不再携带。
+  assert.ok(!content.includes(st.agentToken), '用户消息不应再携带会话令牌');
   assert.ok(!content.includes(originalToken));
+  const personaDir = path.join(h.temp, 'qq-persona');
+  const personaAll = fs.readdirSync(personaDir)
+    .map((f) => fs.readFileSync(path.join(personaDir, f), 'utf8')).join('\n');
+  assert.ok(personaAll.includes(st.agentToken), 'persona 载荷携带轮换后的新令牌');
+  assert.ok(!personaAll.includes(originalToken), '旧令牌不得残留在 persona 载荷里');
   assert.equal((await request('mark-read', { body: { throughSeq: 2 }, token: st.agentToken })).status, 200);
 });
 

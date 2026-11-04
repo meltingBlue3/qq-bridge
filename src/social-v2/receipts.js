@@ -116,3 +116,19 @@ export function countUnseenUnread(st) {
   if (!seen) return st.unread.length;
   return st.unread.filter((m) => !(validSeq(m?.seq) && seen.has(m.seq))).length;
 }
+
+/**
+ * 未读缓冲里「已展示但还没 mark_read 确认」的条数（unreadCount − newUnreadCount）。
+ * N1 口径自解释用：这个数 > 0 时，响应应附带 unreadNote 说明两个计数为何不同。
+ */
+export function shownPendingCount(st) {
+  if (!st || !Array.isArray(st.unread)) return 0;
+  return Math.max(0, st.unread.length - countUnseenUnread(st));
+}
+
+/** N1：两个计数不一致时给模型的自解释说明（一致时返回 null，不占 token）。 */
+export function unreadCountNote(st) {
+  const pending = shownPendingCount(st);
+  if (pending <= 0) return null;
+  return `unreadCount 比 newUnreadCount 多的 ${pending} 条已经展示给你、只等 mark_read 确认——不会再重复下发，也不要当成新消息。`;
+}

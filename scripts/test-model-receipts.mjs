@@ -11,6 +11,8 @@ import {
   isShownSeq,
   pruneShownSeqs,
   rememberShownSeqs,
+  shownPendingCount,
+  unreadCountNote,
   SHOWN_SEQS_CAPACITY_DEFAULT
 } from '../src/social-v2/receipts.js';
 import { handleSocialV2SessionRoutes } from '../src/http/socialv2-session-routes.js';
@@ -71,6 +73,19 @@ test('countUnseenUnread：只数模型没见过的未读', () => {
   assert.equal(countUnseenUnread(st), 1);
   assert.equal(countUnseenUnread({ unread: [] }), 0);
   assert.equal(countUnseenUnread({ unread: [{ seq: 9 }] }), 1, '无回执字段时全部算没看过');
+});
+
+test('unreadCountNote：两口径不一致时自解释，一致时返回 null（N1）', () => {
+  const st = {
+    unread: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
+    modelSeenSeqs: new Set([1, 2, 3])
+  };
+  assert.equal(shownPendingCount(st), 3);
+  const note = unreadCountNote(st);
+  assert.match(note, /3 条已经展示给你/);
+  assert.match(note, /mark_read/);
+  assert.equal(unreadCountNote({ unread: [{ seq: 5 }], modelSeenSeqs: new Set() }), null, '全是新消息时不需要解释');
+  assert.equal(unreadCountNote({ unread: [] }), null);
 });
 
 // ── recent 路由 ──────────────────────────────────────────────────────────

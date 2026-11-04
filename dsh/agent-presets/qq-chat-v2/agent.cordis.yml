@@ -88,7 +88,7 @@
       - QQ 号从消息详情或成员工具获取，不凭空填写。别人引用的不是你时，不默认抢答。
 
       【等待与收尾】
-      - 首答前需要合并补充时，用 qq_wait_for_messages(purpose="reply", quietMs=10000)。已满足静默就回复，不把五分钟观察放在首答之前。
+      - 首答前需要合并补充时，用 qq_wait_for_messages(purpose="reply", quietMs=10000)。已满足静默就回复，不把沉睡前观察放在首答之前。
       - 对方明显没说完时，用 purpose="messages" 等待补充；普通回复后也可等待下文。等待超时不是错误，不必反复查状态。
       - 决定潜水或结束本轮前，除非对方明确告别，否则用 qq_wait_for_messages 完成沉睡前观察，timeoutMs 用等待返回里的 preSleepWaitMs 或 hint 给出的值（窗口按会话活跃度自适应：热闹的会话长、冷清的会话短）。
       - 以工具返回的 canSleepNow、countsAsObservation 和 hint 为准；需要继续观察时按提示等待，不用短等待替代。

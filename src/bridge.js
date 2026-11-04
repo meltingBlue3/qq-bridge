@@ -45,6 +45,7 @@ import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
 import { applyRecallV2 } from './social-v2/recall.js';
 import { createForwardMediaRegistry } from './social-v2/forward-media-registry.js';
 import { countUnseenUnread, isShownSeq, pruneShownSeqs, rememberShownSeqs } from './social-v2/receipts.js';
+import { buildReserved2PersonaSuffix, buildTimeSenseRulesText } from './social-v2/persona-suffix.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -56,7 +57,6 @@ import {
   normalizeSpeakerIdsV2,
   pickWakeTriggersV2,
   preSleepWaitBlockedV2 as checkPreSleepWaitBlocked,
-  preSleepWaitWindowMsV2,
   refreshDefaultWakeConfigV2 as refreshStoredWakeConfigV2,
   wakePriorityV2,
   wakeReasonSeq
@@ -5329,7 +5329,7 @@ async function main() {
       throw error;
     }
     // 人格卡走 system prompt：每次投递前把当前卡同步到该会话对应的文件（内容没变时跳过）。
-    syncPersonaForSession(sessionId, currentMode);
+    syncPersonaForSession(sessionId, currentMode, key);
     let wakeState;
     let wakeToken;
     let wakeSnapshot;
@@ -5628,10 +5628,29 @@ async function main() {
   // 因此消息正文里不再拼接人格卡——历史方案（user 消息前缀）见 docs/guides/PROMPT_LAYERING.md §8。
   const PERSONA_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'qq-persona');
   const personaWritten = new Map(); // sessionId -> 已写入的正文，避免每轮重复落盘
-  function syncPersonaForSession(sessionId, mode = 'chat') {
+  function syncPersonaForSession(sessionId, mode = 'chat', key = '') {
     if (!sessionId) return;
     // v2 需要对「空格代表分条」的一代示例做改写，沿用 roleTextV2 的既有处理。
-    const body = (mode === 'reserved2' ? roleTextV2() : roleRawContent()).trim();
+    let body = (mode === 'reserved2' ? roleTextV2() : roleRawContent()).trim();
+    if (mode === 'reserved2') {
+      // 会话方反馈（第二轮）：稳定规则不随用户消息每回合重发——身份/令牌（每会话
+      // 稳定的数据）与机制规则（反AI味/积极性/首回复节奏/时间感档位/表情策略）
+      // 全部进 persona 载荷（system prompt），唤醒提示词只留动态数据。
+      // persona 文件每轮按内容比对落盘，任一段变化下一轮即生效并自然吃上 cache。
+      let stV2 = null;
+      try { stV2 = key ? getSocialV2State(key) : null; } catch { /* 状态缺失时不带令牌段 */ }
+      body = [
+        body,
+        buildReserved2PersonaSuffix({
+          identity: selfIdentityTextV2(),
+          token: stV2 ? `【会话令牌】${stV2.agentToken}（调用二代状态工具时请在参数中带上此令牌）` : '',
+          stickerStrategy: cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.sticker?.includeInPrompt !== false
+            ? buildStickerStrategyHint()
+            : '',
+          timeSense: timeSenseCfg()
+        })
+      ].filter(Boolean).join('\n\n');
+    }
     const safeId = String(sessionId).replace(/[^A-Za-z0-9._-]/g, '_');
     const file = path.join(PERSONA_DIR, `${safeId}.md`);
     if (!body) {
@@ -6429,11 +6448,11 @@ async function main() {
   }
 
   /**
-   * 【时间感】规则块。没有可判断的消息时返回空串（引导/定时唤醒不必背这段）。
-   *
-   * 注意阈值必须和 §timeSenseCfg 一致，否则模型会看到自相矛盾的两档。
+   * 【时间感】此刻判断（动态）。没有可判断的消息时返回空串（引导/定时唤醒不必背这段）。
+   * 规则档位已拆到 persona 载荷（buildTimeSenseRulesText，随 system 注入）——
+   * 阈值必须和 §timeSenseCfg 一致，否则模型会看到自相矛盾的两档。
    */
-  function buildTimeSenseLine(st) {
+  function buildTimeSenseNowLine(st) {
     const now = Date.now();
     const newest = [...(Array.isArray(st.unread) ? st.unread : [])].reverse().find((m) => m && !m.isSelf)
       || [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf)
@@ -6446,16 +6465,10 @@ async function main() {
     const ageMin = Math.max(0, Math.floor((now - Number(newest.time)) / 60000));
     const staleNow = ageMin >= chatMin;
     const tooOld = ageMin >= silentMin;
+    // 规则档位已迁到 persona 载荷（buildTimeSenseRulesText）；这里只写「此刻判断」。
     const lines = [
-      `【时间感：先看消息多旧，再决定怎么开口】现在 ${localClockText(now)}；最新一条来自「${sender}」，是 ${ageText} 之前发的（${localClockText(newest.time)}）。`,
-      '- 消息里的 at 是本地时间、ago 是距现在多久；开口前先确认最新那条的 ago，不要凭感觉当成"刚刚"。',
-      `- ${chatMin} 分钟以内：正常接，当实时对话。`
+      `【时间感】现在 ${localClockText(now)}；最新一条来自「${sender}」，是 ${ageText} 之前发的（${localClockText(newest.time)}）。`
     ];
-    // 中间档只在两档阈值真的分开时才写：silentMin === chatMin 时写「60～60 分钟」是自相矛盾的废话。
-    if (silentMin > chatMin) {
-      lines.push(`- ${chatMin}～${silentMin} 分钟：可以接，但别用"刚""哈哈哈刚看到"这类实时语气；先确认这个话题还在不在、对方还在不在。`);
-    }
-    lines.push(`- 超过 ${silentMin} 分钟：默认不回，直接 qq_mark_read 收尾；只有当那条明确是找你/提问你、而且回答现在仍然有用时才回，并且开头要带时间感（"这条我才看到""过了挺久才看到"）。`);
     if (staleNow) {
       lines.push(`⚠️ 本次属于「旧账」：最新消息已经是 ${ageText} 前，${tooOld ? `超过 ${silentMin} 分钟` : `超过 ${chatMin} 分钟`}。不要用秒回语气，也不要把别人的旧话题当现在的事接。`);
     }
@@ -6588,28 +6601,22 @@ async function main() {
   }
 
   function buildWakePromptV2(key, reason) {
-    const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
-    const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
-    const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
+    // 角色/身份/令牌/反AI味/积极性/表情策略/首回复节奏/时间感规则/沉睡前观察规则
+    // 已全部迁到 system prompt（persona 载荷 + L1 preset 前缀），见 syncPersonaForSession。
+    // 这里只保留**动态数据**：初始提示词（仅 bootstrap）、表情上下文、此刻状态、
+    // 当前唤醒配置、记忆、参与度、时间感此刻判断、唤醒原因与快照。
     const memoryText = formatMemoryV2(st);
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
     // 注意：黑话表不在这里注入，deliverPromptNow 的 withSlangContext 会统一注入，
     // 避免唤醒 prompt 出现两份黑话表。
     const participationText = formatParticipationV2(st);
     const participationLine = participationText ? `${participationText}\n\n` : '';
-    const antiAiLine = '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。\n\n';
     const stickerCfg = cfg.socialV2?.sticker ?? {};
+    // 表情【策略】在 persona 载荷里；这里只带【上下文】（表情列表是会随库同步变化的数据）。
     const stickerLine = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
-      ? `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8, key)}\n\n`
+      ? `${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8, key)}\n\n`
       : '';
-    // 会话方反馈⑤：窗口按会话活跃度自适应（冷清会话更短），显式配置是上限。
-    const preSleepMs = preSleepWaitWindowMsV2(st, cfg.socialV2?.wake ?? {});
-    const proactiveLine = '【积极性】不要习惯性潜水：群里有你能接的话题就主动参与，偶尔插一句别人的话题也很正常；只有确实没话可说、对方已明确结束、或长时间没人说话时才潜水。\n\n';
-    const replyTiming = replyTimingV2(st);
-    const replyLine = `【首回复节奏】先处理已有消息，完整的问题及时回答。需要确认对方是否继续补充时，用 qq_wait_for_messages(purpose="reply", quietMs=${replyTiming.quietMs})；从最后来信计时，合批和读提示词的耗时也算，目前还差约 ${Math.ceil(replyTiming.remainingQuietMs / 1000)} 秒静默。已安静够久可直接回，工具也会立即返回并补上思考期间的新消息。只有明确没说完、你确实要等下文时，才用普通 messages 长等待。\n\n`;
-    const preSleepLine = `【沉睡前强制等待】这是决定潜水收尾时的步骤，不是首回复的前置条件。除非对方明确说“不聊了/晚安/下了/拜拜”等结束语，否则每次设置潜水/下一次唤醒前，必须先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成一次沉睡前观察；回复前 purpose="reply" 的短静默不能代替这次完整观察。观察窗口按会话活跃度自适应（当前约 ${Math.round(preSleepMs / 60000)} 分钟：热闹的会话长、冷清的会话短；管理员可用 socialV2.wake.preSleepWaitMs 调上限）。窗口内没人说话，返回 preSleepWaitSatisfied=true，可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看返回的 newMessages——判断不需要你参与就可以直接沉睡，若你选择参与回复，则下次想睡时需要重新等待观察窗口。【不要靠猜】：等待返回里的 canSleepNow/hint 就是闸门的判断结果——canSleepNow=true 立刻收尾（mark_read 或 set_wake_config）；false 时按 hint 给出的 timeoutMs 一次等满，别用更短的 timeoutMs 去凑（更短的等待不算观察，只会白等一轮）。\n\n`;
     const lastMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf);
     const lastAiMin = st.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(st.lastAiReplyAt)) / 60000)) : null;
     const unreadTotal = (st.unread || []).length;
@@ -6644,8 +6651,8 @@ async function main() {
     const initialPromptText = reason === 'bootstrap' ? formatInitialPromptV2(key) : '';
     const initialPromptLine = initialPromptText ? `${initialPromptText}\n\n` : '';
     // 时间感放在 base 的最末尾：紧接着就是【唤醒】原因与行动指令，位置最显眼。
-    const timeSenseLine = buildTimeSenseLine(st);
-    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + wakeLine + memoryLine + participationLine + preSleepLine + timeSenseLine;
+    const timeSenseLine = buildTimeSenseNowLine(st);
+    const base = initialPromptLine + stickerLine + statusLine + wakeLine + memoryLine + participationLine + timeSenseLine;
     // 唤醒原因里的那条消息本身多旧：`atMention@seq194` 这种形态能反查到原消息。
     const triggeredSeq = wakeReasonSeq(reason);
     const triggeredMsg = triggeredSeq ? findV2MessageBySeq(st, triggeredSeq) : null;
@@ -6658,7 +6665,7 @@ async function main() {
       return `${base}【唤醒】${key}\n原因：你设置的有限潜水时间已到；在你规定的时间内没有任何一项条件被触发，只是因为时间到了所以你被唤醒。\n你可以查看消息，或继续设置新的唤醒条件。`;
     }
     if (reason === 'replyCheck') {
-      return `${base}【回复检查】${key}\n原因：你刚刚发送过消息，现在回来检查是否有人回复。\n已有回复时先看消息，需要短静默就用 qq_wait_for_messages(purpose="reply") 判断对方是否说完；如果没人回你，不用硬补一句，但也不要立刻潜水——先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察：没人说话可收尾；有人说话则查看 newMessages，不需要你参与也可直接收尾（qq_mark_read 或 qq_set_wake_config）。`;
+      return `${base}【回复检查】${key}\n原因：你刚刚发送过消息，现在回来检查是否有人回复。\n已有回复时先看消息，需要短静默就用 qq_wait_for_messages(purpose="reply") 判断对方是否说完；如果没人回你，不用硬补一句，但也不要立刻潜水——先完成一次沉睡前观察再收尾（规则见系统提示，timeoutMs 用等待返回里的 hint）：没人说话可收尾；有人说话则查看 newMessages，不需要你参与也可直接收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
     if (reason === 'proactiveCheck') {
       return `${base}【主动机会】${key}\n原因：群里已经安静了一段时间，这是一次你可以主动冒泡的机会。\n优先主动开个话题、追问上次没聊完的事、分享一个刚想到的想法；如果一时想不到，可以用 mcp__web-search-safe__web_search 搜一下当前热点/时事/网络热梗，再结合记忆里的群友兴趣挑一个自然角度。只要内容自然，就大胆开口；如果实在没话想说，再安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
@@ -6666,17 +6673,13 @@ async function main() {
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
-    return `${base}【唤醒】${key}\n原因：${reason}${triggeredLine}\n【行动前】先判断：群里在聊什么？热闹还是冷清？有没有人直接找你？对方说完了吗？你有没有真正想说的？\n如果群聊正热但没人叫你，可以插一句有趣的/相关的，插不上再看情况潜水；不要一上来就划走。\n【引用：只在必要时用】只有你这条消息指向的人或消息并非最新一条别人的消息，或者你连续的几句话中不同消息指代的是不同的消息或人时，才用 qq_reply 或 qq_send_message 的 replyToMessageId 指向具体那条（填那条消息的 messageId 或本地 seq 都可以，桥接会自动换算）；其他情况不要引用，别让对方猜。\n你可以调用工具查看未读消息、人设、状态，自行决定是否发言；决定潜水前必须按上面的【沉睡前强制等待】先等够观察窗口。`;
+    return `${base}【唤醒】${key}\n原因：${reason}${triggeredLine}\n【行动前】先判断：群里在聊什么？热闹还是冷清？有没有人直接找你？对方说完了吗？你有没有真正想说的？\n如果群聊正热但没人叫你，可以插一句有趣的/相关的，插不上再看情况潜水；不要一上来就划走。\n你可以调用工具查看未读消息、人设、状态，自行决定是否发言；决定潜水前先按系统规则完成沉睡前观察（引用/寻址规则同样在系统提示里）。`;
   }
 
   function buildWakeReminderPromptV2(key) {
-    const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
-    const identityLine = selfIdentityTextV2();
-    const st = getSocialV2State(key);
-    const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
-    const preSleepMs = preSleepWaitWindowMsV2(st, cfg.socialV2?.wake ?? {});
-    return `${roleLine}${identityLine}${tokenLine}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
+    // 角色/身份/令牌已随 persona 载荷进 system（每次投递前同步），提醒只带动态指令。
+    void key;
+    return '【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先完成沉睡前观察（timeoutMs 用等待返回里的 hint 给的值）；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。';
   }
 
   function drainPromptQueue(key, errorMsg) {

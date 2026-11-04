@@ -7,6 +7,8 @@
 //       无起始时间的残留 collector 不再判忙；collector 保留，迟到回复照常 flush。
 //   #29 被 @ 了不理人 —— 机器人昵称/QQ 号必须写进唤醒 prompt（否则 agent 把 @自己 当 @别人）。
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 
 let failures = 0;
@@ -96,7 +98,7 @@ await test('#11/#19 回合判忙：无起始时间的残留 collector 不再永�
   } finally { await h.close(); }
 });
 
-await test('#29 唤醒 prompt 必须写明机器人自己的昵称与 QQ 号', async () => {
+await test('#29 机器人身份进 persona 载荷（system），不随用户消息重发', async () => {
   const h = await bridgeHarness();
   try {
     h.setSelfIdentity('樰', '10001');
@@ -106,17 +108,28 @@ await test('#29 唤醒 prompt 必须写明机器人自己的昵称与 QQ 号', a
     assert.match(line, /10001/);
     assert.match(line, /@樰/, '必须明确「@昵称」指的是自己');
 
+    // 身份/令牌/机制规则随 persona 载荷（system prompt）注入——N2 分层迁移。
+    h.syncPersonaForSession('fixture-1', 'reserved2', KEY);
+    const persona = fs.readFileSync(path.join(h.temp, 'qq-persona', 'fixture-1.md'), 'utf8');
+    assert.match(persona, /【你的身份】/, '身份随 persona 载荷进 system');
+    assert.match(persona, /@樰/);
+    assert.match(persona, /10001/);
+    assert.match(persona, /【会话令牌】/, '令牌同样在 system 里');
+    assert.match(persona, /【反AI味】/, '机制规则也随 system 注入');
+
     const prompt = h.buildWakePromptV2(KEY, 'atMention');
-    assert.match(prompt, /【你的身份】/, '每次唤醒都要带身份（它是 agent 唯一能对上号的地方）');
-    assert.match(prompt, /@樰/);
-    assert.match(prompt, /10001/);
+    assert.doesNotMatch(prompt, /【你的身份】/, '身份已迁 system，用户消息不再每回合重发');
+    assert.doesNotMatch(prompt, /【会话令牌】/);
+    assert.doesNotMatch(prompt, /【反AI味】/);
 
     const reminder = h.buildWakeReminderPromptV2(KEY);
-    assert.match(reminder, /【你的身份】/, '收尾提醒也要带身份');
+    assert.doesNotMatch(reminder, /【你的身份】/, '收尾提醒也不再带身份（system 里有）');
 
     h.setSelfIdentity('', '');
     assert.equal(h.selfIdentityTextV2(), '', '身份未知时不注入空行（不能写「你的昵称是（）」）');
-    assert.doesNotMatch(h.buildWakePromptV2(KEY, 'timeout'), /【你的身份】/);
+    h.syncPersonaForSession('fixture-1', 'reserved2', KEY);
+    const persona2 = fs.readFileSync(path.join(h.temp, 'qq-persona', 'fixture-1.md'), 'utf8');
+    assert.doesNotMatch(persona2, /【你的身份】/, '身份未知时 persona 也不写身份段');
   } finally { await h.close(); }
 });
 

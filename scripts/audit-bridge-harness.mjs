@@ -57,6 +57,7 @@ import * as recallModule from '../src/social-v2/recall.js';
 import * as tokenFragmentModule from '../src/token-fragment.js';
 import * as forwardMediaRegistryModule from '../src/social-v2/forward-media-registry.js';
 import * as receiptsModule from '../src/social-v2/receipts.js';
+import * as personaSuffixModule from '../src/social-v2/persona-suffix.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
@@ -193,7 +194,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     auditAndSend, KNOWN_AGENT_TOKENS, pending, sendChains,
     sendBurstToQQ, sendMessagesV2, lastSendSucceeded,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
-    noteModelMessagesV2, readThroughSeqV2,
+    noteModelMessagesV2, readThroughSeqV2, syncPersonaForSession,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
     syncStickerLibrary, listStickersForV2, getStickerImageData,
     refreshMode, modeAllowed, trackTurnEvent, replayPendingWakeReasonsV2,
@@ -228,14 +229,16 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     execFileSync: () => '',
     // process 桩要带 env：voice-core / bridge 会读 process.env.FFMPEG_PATH、FFPROBE_PATH 等。
     // 之前只给 pid/platform/kill/exit，导致 `process.env.FFMPEG_PATH` 直接抛 TypeError。
-    process: { pid: process.pid, platform: process.platform, kill: process.kill, env: {}, exit: (code) => { throw new Error('unexpected exit ' + code); } },
+    // DSH_HOME 指到 temp：persona 载荷（qq-persona/<sessionId>.md）必须落在临时目录，
+    // 否则 reserved2 投递会把稳定规则写进真实的 ~/.dsh/（测试污染 + 无法断言）。
+    process: { pid: process.pid, platform: process.platform, kill: process.kill, env: { DSH_HOME: temp }, exit: (code) => { throw new Error('unexpected exit ' + code); } },
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timers.add(timer); return timer; },
     clearTimeout, setInterval: () => ({ unref() {} }), clearInterval: () => {},
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...dshRoutesModule, ...accessRoutesModule, ...socialRoutesModule, ...notifyRoutesModule, ...tokenRoutesModule, ...lifecycleRoutesModule, ...socialV2AdminRoutesModule, ...socialV2SessionRoutesModule, ...socialV2SendRoutesModule, ...socialV2StickerRoutesModule, ...voiceRoutesModule, ...waitRouteModule, ...memoryRoutesModule, ...socialV2MiscRoutesModule, ...socialV2ReadRoutesModule, ...slangRoutesModule, ...sendRoutesModule, ...wakePolicyModule, ...stateStoreModule, ...wakeSchedulerModule, ...turnLeaseModule, ...messageIdDedupeModule, ...recallModule, ...tokenFragmentModule, ...forwardMediaRegistryModule, ...receiptsModule,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...dshRoutesModule, ...accessRoutesModule, ...socialRoutesModule, ...notifyRoutesModule, ...tokenRoutesModule, ...lifecycleRoutesModule, ...socialV2AdminRoutesModule, ...socialV2SessionRoutesModule, ...socialV2SendRoutesModule, ...socialV2StickerRoutesModule, ...voiceRoutesModule, ...waitRouteModule, ...memoryRoutesModule, ...socialV2MiscRoutesModule, ...socialV2ReadRoutesModule, ...slangRoutesModule, ...sendRoutesModule, ...wakePolicyModule, ...stateStoreModule, ...wakeSchedulerModule, ...turnLeaseModule, ...messageIdDedupeModule, ...recallModule, ...tokenFragmentModule, ...forwardMediaRegistryModule, ...receiptsModule, ...personaSuffixModule,
     // bridge.js 里用了 import as 的别名，VM 里没有 import，必须把别名也补上。
     createDefaultWakeConfigV2: wakePolicyModule.defaultWakeConfigV2,
     refreshStoredWakeConfigV2: wakePolicyModule.refreshDefaultWakeConfigV2,

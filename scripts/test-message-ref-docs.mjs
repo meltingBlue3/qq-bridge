@@ -24,10 +24,11 @@ test('文案契约：reply/send 系参数都声明「id 或本地 seq 都可以�
 });
 
 test('文案契约：唤醒提示词的【引用】段说明 id/seq 皆可', () => {
-  assert.ok(
-    bridgeSource.includes('（填那条消息的 messageId 或本地 seq 都可以，桥接会自动换算）'),
-    '唤醒提示词应告诉模型 replyToMessageId 双寻址'
-  );
+  // N2 分层迁移：引用/寻址规则现在住在 L1 preset 前缀（system prompt）里，
+  // 唤醒提示词（用户消息）只留一句指向系统规则的话。
+  const preset = fs.readFileSync(root + 'dsh/agent-presets/qq-chat-v2/agent.cordis.yml', 'utf8');
+  assert.ok(preset.includes('messageId 或本地 seq 都可以（桥接自动识别换算）'), 'preset 的引用/寻址规则声明双寻址');
+  assert.ok(bridgeSource.includes('（引用/寻址规则同样在系统提示里）'), '唤醒提示词指向系统规则');
 });
 
 // ── 行为钉：message-detail 按 seq 命中本地消息 ─────────────────────────────

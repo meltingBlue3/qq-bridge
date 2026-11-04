@@ -44,6 +44,8 @@ const tests = [
   'test-message-ref-docs.mjs',
   // 普通聊天并入投递队列：提交顺序 = 到达顺序（带图慢解析不插队）。
   'test-delivery-order.mjs',
+  // 稳定规则入 system（会话方反馈第二轮）：persona 载荷 + 唤醒提示词只留动态数据。
+  'test-persona-suffix.mjs',
   // 已展示回执（会话方反馈①）：快照/未读/最近不再重复下发同一条消息。
   'test-model-receipts.mjs',
   // 表情/黑话 scope 归属：跨会话信息流边界（库函数 + 注入过滤）。

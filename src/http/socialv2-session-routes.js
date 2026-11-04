@@ -5,7 +5,7 @@
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
 
 import { slangVisibleInScope } from '../slang-learner.js';
-import { countUnseenUnread, filterUnshownRecent, isShownSeq } from '../social-v2/receipts.js';
+import { countUnseenUnread, filterUnshownRecent, isShownSeq, unreadCountNote } from '../social-v2/receipts.js';
 import { preSleepWaitWindowMsV2 } from '../social-v2/wake-policy.js';
 
 /**
@@ -75,6 +75,8 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       unreadCount: st.unread.length,
       // 会话方反馈③：缓冲总量 vs 模型没见过的，两个口径都给。
       newUnreadCount: countUnseenUnread(st),
+      // N1：两数不一致时自解释，省得模型/观察者当成 bug。
+      ...(unreadCountNote(st) ? { unreadNote: unreadCountNote(st) } : {}),
       recentCount: st.recentMessages.length,
       lastWakeReason: st.lastWakeReason,
       lastAiReplyAt: st.lastAiReplyAt
@@ -155,8 +157,11 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       },
       enabledTools,
       replyTiming: replyTimingV2(st),
+      // 令牌随 persona 载荷进 system，这里再给一份作自愈入口（persona 写盘失败时模型可自查）。
+      token: st.agentToken,
       unreadCount: st.unread.length,
       newUnreadCount: countUnseenUnread(st),
+      ...(unreadCountNote(st) ? { unreadNote: unreadCountNote(st) } : {}),
       recentCount: st.recentMessages.length,
       currentWakeConfig: st.wakeConfig,
       wakeSafety: computeWakeSafetyV2(st.wakeConfig),
@@ -216,13 +221,15 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     }
     const messages = afterSeq === null ? baseUnread.slice(-limit)
       : st.unread.filter((m) => Number.isSafeInteger(m.seq) && m.seq > afterSeq).slice(0, limit);
-    // newUnreadCount 必须在登记回执**之前**取：模型要的是「这次调用时我有几条没见过」
-    // （本次返回的就是它们）；登记之后再算恒为 0，就没有信息量了。
+    // newUnreadCount 与 unreadNote 都必须在登记回执**之前**取：模型要的是「这次调用
+    // 时我有几条没见过」（本次返回的就是它们）；登记之后再算恒为 0，就没有信息量了。
     const newUnreadCount = countUnseenUnread(st);
+    const note = unreadCountNote(st);
     const readThroughSeq = isAgent ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
     sendJson({
       ok: true, key, unreadCount: st.unread.length, messages, readThroughSeq,
       newUnreadCount,
+      ...(note ? { unreadNote: note } : {}),
       ...(isAgent ? { excludedShownCount } : {})
     });
     return true;

@@ -55,15 +55,9 @@ export async function handleNotifyRoutes({ req, url, sendJson, readBody, deps })
       return true;
     }
     const isV2 = currentMode === 'reserved2';
-    const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
-    // 二代必须带会话令牌，否则 AI 调用任何 MCP 状态/发送工具都会被拒。
-    let tokenLine = '';
-    if (isV2) {
-      const stV2 = getSocialV2State(key);
-      tokenLine = `【会话令牌】${stV2.agentToken}（调用二代状态/发送工具时请在参数中带上此令牌）\n\n`;
-    }
-    const promptText = `${roleLine}${tokenLine}【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
+    // 角色/身份/令牌已随 persona 载荷进 system（deliverPrompt → syncPersonaForSession
+    // 在每次投递前同步），提醒正文不再重复携带——稳定规则进 system、用户消息只放数据。
+    const promptText = `【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
     let sessionId = null;
     let popSilent = null;
     try {

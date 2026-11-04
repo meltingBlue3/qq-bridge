@@ -21,8 +21,11 @@ test('currentRoleHintV2 返回真实卡文（roleTextV2），不再空串', () =
 test('「完整角色卡请调用 qq_get_prompt 查看」的死胡同文案已消失', () => {
   assert.ok(!bridgeSrc.includes('完整角色卡请调用'), 'bridge.js 不得再引导模型去调一个拿不到卡文的工具');
   assert.ok(!notifySrc.includes('完整角色卡请调用'), 'notify-routes.js 同样');
-  assert.match(bridgeSrc, /角色卡已随系统提示注入，可用 qq_get_prompt 复查/);
-  assert.match(notifySrc, /角色卡已随系统提示注入，可用 qq_get_prompt 复查/);
+  // N2 分层迁移：角色指针行（【当前角色】X（角色卡已随系统提示注入…））整体退场——
+  // 卡文本身随 persona 载荷进 system（syncPersonaForSession 每次投递前同步）。
+  assert.ok(!bridgeSrc.includes('角色卡已随系统提示注入'), '角色指针已迁 system（persona 载荷）');
+  assert.ok(!notifySrc.includes('角色卡已随系统提示注入'), 'notify 同样');
+  assert.match(bridgeSrc, /syncPersonaForSession\(sessionId, currentMode, key\)/, '每次投递都会同步 persona 载荷');
 });
 
 test('config.example.json 的 maxInjectChars 与代码默认（8000）对齐', () => {

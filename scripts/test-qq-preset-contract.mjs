@@ -90,7 +90,7 @@ test('one closing action can acknowledge the read watermark after the full obser
 
 test('pre-reply quiet checks, waiting for replies and pre-sleep observation have distinct instructions', () => {
   assert.match(prefix, /qq_wait_for_messages\(purpose="reply", quietMs=10000\)/);
-  assert.match(prefix, /不把五分钟观察放在首答之前/);
+  assert.match(prefix, /不把沉睡前观察放在首答之前/);
   assert.match(prefix, /purpose="messages"/);
   assert.match(prefix, /等待超时不是错误/);
 });

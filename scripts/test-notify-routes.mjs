@@ -39,7 +39,7 @@ function harness({ dshReady = true, promptResult = { ok: true }, mode = 'chat' }
   return { call, prompts, activities, social, state };
 }
 
-test('notify-ai 成功投递：静默 turn 登记/清理、prompt 带角色与禁复述约束', async () => {
+test('notify-ai 成功投递：静默 turn 登记/清理、prompt 带禁复述约束', async () => {
   const h = harness();
   const result = await h.call('POST', '/api/console/notify-ai', { key: 'group:456', message: '请主动聊聊昨晚话题' });
   assert.equal(result.handled, true);
@@ -48,7 +48,8 @@ test('notify-ai 成功投递：静默 turn 登记/清理、prompt 带角色与�
   assert.equal(h.prompts.length, 1);
   const { promptText, opts } = h.prompts[0];
   assert.equal(opts.silent, true);
-  assert.match(promptText, /【当前角色】测试卡/);
+  // N2：角色/身份/令牌随 persona 载荷进 system（deliverPrompt 内同步），提醒正文不再重复。
+  assert.doesNotMatch(promptText, /【当前角色】/, '角色提醒已迁 system，用户消息只放数据');
   assert.match(promptText, /【后台控制端提醒】/);
   assert.match(promptText, /绝对不要复述/);
   assert.match(promptText, /如果不需要在群里发言，请不要输出会发到 QQ 的内容/);
@@ -56,12 +57,12 @@ test('notify-ai 成功投递：静默 turn 登记/清理、prompt 带角色与�
   assert.equal(h.activities.length, 1);
 });
 
-test('二代模式注入会话令牌且不走一代禁发措辞', async () => {
+test('二代模式令牌随 system 注入，提醒不带一代禁发措辞', async () => {
   const h = harness({ mode: 'reserved2' });
   const result = await h.call('POST', '/api/console/notify-ai', { key: 'group:456', message: '提醒' });
   assert.equal(result.last.obj.ok, true);
   const { promptText } = h.prompts[0];
-  assert.match(promptText, /【会话令牌】v2-token-abc/);
+  assert.doesNotMatch(promptText, /【会话令牌】/, '令牌随 persona 载荷进 system，不再随用户消息重发');
   assert.match(promptText, /qq_send_message \/ qq_reply/);
   assert.ok(!promptText.includes('请不要输出会发到 QQ 的内容'));
 });

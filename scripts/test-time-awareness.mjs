@@ -8,6 +8,8 @@
 //
 // 本文件验证修复后的契约：at/ago 字段、提示词里的时间感分档、唤醒原因的年龄、���照头的时间。
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import { compactModelMessage, compactModelData, describeAge, serializeModelData } from '../src/qq-model-view.js';
 
@@ -90,6 +92,10 @@ const append = (h, text, { ageMs = 0, sender = '小明' } = {}) => {
   return seq;
 };
 
+// N2：时间感「规则档位」在 persona 载荷（system）里，「此刻判断」在唤醒提示词里。
+const syncPersona = (h) => h.syncPersonaForSession('fixture-1', 'reserved2', KEY);
+const personaOf = (h) => fs.readFileSync(path.join(h.temp, 'qq-persona', 'fixture-1.md'), 'utf8');
+
 await test('新消息（几秒前）不触发旧账警告', async () => {
   await withBridge(async (h) => {
     append(h, '在吗');
@@ -111,13 +117,16 @@ await test('40 分钟前的消息：提示词给出 ago 并明确标记「旧账
   });
 });
 
-await test('超过 staleSilentMinutes：规则要求默认不回、直接收尾', async () => {
+await test('超过 staleSilentMinutes：规则要求默认不回、直接收尾（规则在 persona 载荷）', async () => {
   await withBridge(async (h) => {
     append(h, '有人吗', { ageMs: 5 * 60 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'keyword:大肥鱼@seq1');
     assert.match(prompt, /5h 之前发的/);
-    assert.match(prompt, /默认不回，直接 qq_mark_read 收尾/);
     assert.match(prompt, /超过 120 分钟/, '默认阈值应写进警告里');
+    syncPersona(h);
+    const persona = personaOf(h);
+    assert.match(persona, /默认不回，直接 qq_mark_read 收尾/, '规则档位随 system 注入');
+    assert.match(persona, /超过 120 分钟/, '规则里的阈值与 cfg 一致');
   });
 });
 
@@ -132,14 +141,18 @@ await test('阈值可由 config 调整（staleChatMinutes / staleSilentMinutes�
     append(h, '刚刚那条', { ageMs: 12 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'atMention@seq1');
     assert.doesNotMatch(prompt, /旧账/);
-    assert.match(prompt, /60 分钟以内：正常接/);
+    syncPersona(h);
+    assert.match(personaOf(h), /60 分钟以内：正常接/, '阈值随 cfg 进 persona 规则');
   }, { wake: { staleChatMinutes: 60 } });
   // silentMinutes 低于 chatMinutes 时必须被抬平：否则中间档会写成自相矛盾的「60～60 分钟」
   await withBridge(async (h) => {
     append(h, '刚刚那条', { ageMs: 12 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'atMention@seq1');
     assert.doesNotMatch(prompt, /60～60/);
-    assert.match(prompt, /超过 60 分钟/);
+    syncPersona(h);
+    const persona = personaOf(h);
+    assert.doesNotMatch(persona, /60～60/, '抬平逻辑对 persona 规则同样生效');
+    assert.match(persona, /超过 60 分钟/);
   }, { wake: { staleChatMinutes: 60, staleSilentMinutes: 15 } });
 });
 
