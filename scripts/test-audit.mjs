@@ -38,6 +38,8 @@ const tests = [
   'test-media-ports.mjs', 'test-forward-media-registry.mjs',
   // 按会话分链：跨会话并行互不阻塞、同会话严格保序、链尾清理 + AI 发送前重查。
   'test-send-chains.mjs',
+  // 消息寻址统一（会话方反馈②）：id/seq 双寻址的文案契约 + detail 路由按 seq 命中的行为钉。
+  'test-message-ref-docs.mjs',
   // 普通聊天并入投递队列：提交顺序 = 到达顺序（带图慢解析不插队）。
   'test-delivery-order.mjs',
   // 表情/黑话 scope 归属：跨会话信息流边界（库函数 + 注入过滤）。
