@@ -1221,10 +1221,11 @@ async function main() {
     let resolveSend;
     let rejectSend;
     const sendPromise = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
-    sendChain = sendChain.then(async () => {
+    // 与文本同会话同一条链：语音发完之前后面的文本排队，不会插队到语音前面。
+    const voiceChain = sendChainFor(key).then(async () => {
       try {
         if (assertSendAllowed) assertSendAllowed();
-        // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（文本/图片共用同一 sendChain，
+        // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（同一会话分链内，
         // 所以这条语音发完之前后面的文本会自然排队，不会插队到语音前面）。
         const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
         const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
@@ -1250,6 +1251,7 @@ async function main() {
         rejectSend(error);
       }
     });
+    rememberSendChain(key, voiceChain);
     try {
       const data = await sendPromise;
       return {
@@ -1411,14 +1413,14 @@ async function main() {
     const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
     const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
     const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
-    // 与文本发送共用 sendChain，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
+    // 与文本发送共用同一会话分链，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
     let sendResolve;
     let sendReject;
     const sendResult = new Promise((resolve, reject) => {
       sendResolve = resolve;
       sendReject = reject;
     });
-    sendChain = sendChain.then(async () => {
+    const stickerChain = sendChainFor(key).then(async () => {
       try {
         // 真人发表情前通常会有短暂停顿，避免“文字刚发完表情立刻跟上”的机械感。
         await sleep(randInt(800, 2000));
@@ -1442,6 +1444,7 @@ async function main() {
         sendReject(error);
       }
     });
+    rememberSendChain(key, stickerChain);
     const data = await sendResult;
     // 更新本地使用统计
     const updated = markStickerUsed(stickerEntries, entry.id, 'sticker');
@@ -3677,8 +3680,23 @@ async function main() {
   // 待应答的提问/审批：convKey -> pending
   const pending = new Map(); // key -> { kind, rpcId, sessionId, ... }
 
-  // QQ 发送队列（顺序发送 + 间隔，避免触发频率限制）
-  let sendChain = Promise.resolve();
+  // QQ 发送队列：**按会话分链**（key -> 链尾 Promise）。
+  // 单链的代价：一个群刷屏/发大语音时，其他会话的回复被压在后面排队，
+  // 且观察自己被回复的延迟可以推断别的会话正在发消息（时序侧信道）。
+  // 分链后：跨会话并行互不阻塞（条间 sleep 也只拖自己），同会话严格保序
+  // （文字/表情/语音/burst 都进同一条链）。链尾 promise 的每个环节都自带
+  // catch，永不 reject；settle 后若链尾仍是自己则删除条目，Map 不会无界增长。
+  const sendChains = new Map(); // 会话 key -> 链尾 Promise
+  function sendChainFor(key) {
+    return sendChains.get(key) ?? Promise.resolve();
+  }
+  function rememberSendChain(key, promise) {
+    // 链建立即登记（不是发完才登记）：否则同会话的文本会插到在途语音/表情前面。
+    sendChains.set(key, promise);
+    promise.finally?.(() => {
+      if (sendChains.get(key) === promise) sendChains.delete(key);
+    });
+  }
   function redactKnownTokensOnly(text) {
     return tokenFragments.redact(String(text ?? ''));
   }
@@ -3694,8 +3712,9 @@ async function main() {
     const [kind, id] = key.split(':');
     const parts = splitForQQ(safeMsg);
     lastSendFailed.delete(key);
+    let chain = sendChainFor(key);
     for (const part of parts) {
-      sendChain = sendChain
+      chain = chain
         .then(async () => {
           assertSendAllowed();
           if (kind === 'private') await withTimeout(bot.sendPrivateMessage(Number(id), text(escapeCqText(part))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
@@ -3707,7 +3726,8 @@ async function main() {
         })
         .then(() => sleep(cfg.sendDelayMs));
     }
-    return sendChain;
+    rememberSendChain(key, chain);
+    return chain;
   }
 
   /** 上一批发往该会话的消息是否全部成功。 */
@@ -3865,7 +3885,7 @@ async function main() {
     return { main: main.filter(Boolean), followUp: null };
   }
 
-  // 分条发送：与 sendToQQ 共用同一 sendChain，严格顺序；条间随机间隔，
+  // 分条发送：与 sendToQQ 共用同一会话分链，严格顺序；条间随机间隔，
   // 有概率使用长间隔（错落感）；最后一条后不再 sleep。
   function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
     const assertSendAllowed = captureSendGuard(key);
@@ -3884,10 +3904,11 @@ async function main() {
     }
 
     const sent = [];
+    let chain = sendChainFor(key);
     for (let i = 0; i < messages.length; i++) {
       const msg = redactKnownTokensOnly(messages[i]);
       const isLast = i === messages.length - 1;
-      sendChain = sendChain
+      chain = chain
         .then(async () => {
           assertSendAllowed();
           if (kind === 'private') await withTimeout(bot.sendPrivateMessage(Number(id), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
@@ -3904,10 +3925,11 @@ async function main() {
       if (!isLast) {
         const useLong = longProb > 0 && Math.random() < longProb;
         const delay = useLong ? randInt(longMin, longMax) : randInt(min, max);
-        sendChain = sendChain.then(() => sleep(delay));
+        chain = chain.then(() => sleep(delay));
       }
     }
-    return sendChain.then(() => sent);
+    rememberSendChain(key, chain);
+    return chain.then(() => sent);
   }
 
 
@@ -4463,11 +4485,12 @@ async function main() {
     const [kind, id] = key.split(':');
     const sent = [];
     const failed = [];
+    let chain = sendChainFor(key);
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       const useReply = i === 0 ? replyToMessageId : null;
       const useAt = i === 0 ? atUserId : null;
-      sendChain = sendChain
+      chain = chain
         .then(async () => {
           assertSendAllowed();
           await onebotSend(kind, id, msg, useReply, useAt);
@@ -4475,14 +4498,17 @@ async function main() {
         })
         .catch((error) => {
           log(`QQ 发送失败 (${key}):`, error?.message ?? error);
+          // 与 sendToQQ/burst 一致的失败记账：v1 社交循环靠它判断「是否真的说过话」。
+          lastSendFailed.set(key, true);
           failed.push(error);
         });
       if (i < delays.length) {
         const d = delays[i];
-        sendChain = sendChain.then(() => sleep(d));
+        chain = chain.then(() => sleep(d));
       }
     }
-    return sendChain.then(() => {
+    rememberSendChain(key, chain);
+    return chain.then(() => {
       if (failed.length > 0) {
         const err = new Error(`QQ 发送失败 ${failed.length}/${messages.length} 条：${failed[0]?.message ?? '未知错误'}`);
         err.sent = sent.slice();

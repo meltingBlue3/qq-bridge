@@ -80,6 +80,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   // 语音发送在桥接里是**直接 fetch 网关**（与文本/表情共用 sendChain，但要自己带 record 段），
   // 所以这里给 VM 注入一个记录型 fetch：既不让测试真的发 QQ 消息，又能断言发出的段内容。
   const fakeFetch = async (url, init = {}) => {
+    // 测试可注入 fetch 延迟/记录（断言语音/表情与文本的同会话顺序）。
+    if (typeof globals.fetchHook === 'function') await globals.fetchHook(url, init);
     const body = (() => { try { return JSON.parse(init.body ?? '{}'); } catch { return init.body; } })();
     calls.http.push({ url: String(url), body });
     const action = String(url).split('/').pop();
@@ -135,8 +137,14 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     callUnary: async (method, params) => { calls.cancelled.push({ method, params }); return success({ accepted: true }); },
   };
   class FakeBot {
-    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); }
-    async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); }
+    async sendPrivateMessage(id, text) {
+      if (typeof globals.botSendHook === 'function') await globals.botSendHook('private', id, text);
+      calls.sent.push({ kind: 'private', id, text });
+    }
+    async sendGroupMessage(id, text) {
+      if (typeof globals.botSendHook === 'function') await globals.botSendHook('group', id, text);
+      calls.sent.push({ kind: 'group', id, text });
+    }
     async getImage({ file }) {
       calls.images.push(file);
       // Valid 1 × 1 PNG, supplied entirely in memory by the fixture gateway.
@@ -181,7 +189,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, promptQueues,
-    auditAndSend, KNOWN_AGENT_TOKENS, pending,
+    auditAndSend, KNOWN_AGENT_TOKENS, pending, sendChains,
+    sendBurstToQQ, sendMessagesV2, lastSendSucceeded,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
     syncStickerLibrary, listStickersForV2, getStickerImageData,

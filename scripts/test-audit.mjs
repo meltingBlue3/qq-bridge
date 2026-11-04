@@ -36,6 +36,8 @@ const tests = [
   'test-token-fragment.mjs',
   // 媒体抓取端口白名单 + forward-media 会话登记（双层 SSRF 边界）。
   'test-media-ports.mjs', 'test-forward-media-registry.mjs',
+  // 按会话分链：跨会话并行互不阻塞、同会话严格保序、链尾清理。
+  'test-send-chains.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。
