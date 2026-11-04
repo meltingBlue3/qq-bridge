@@ -30,6 +30,8 @@ const tests = [
   'test-message-id-dedupe.mjs',
   // 撤回事件：入库占位替换（保 seq/清媒体转发）+ bridge 接线的缓存清理。
   'test-socialv2-recall.mjs',
+  // qq_get_prompt 的 role.hint 出口：返回真实卡文（修复「请调工具却拿不到」的死胡同）。
+  'test-role-hint.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。

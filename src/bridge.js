@@ -5745,8 +5745,11 @@ async function main() {
   }
 
   function currentRoleHintV2() {
-    // 同 currentRoleHint：人格卡走 system prompt，不再进消息正文。
-    return '';
+    // 人格卡每回合随 system prompt（{{qq_persona}}）注入，消息正文不带；
+    // 但 qq_get_prompt 的 role.hint 是模型主动复查人格卡的唯一入口——
+    // 返回真实卡文（按二代小节过滤 + 注入上限截断），而不是空串死胡同
+    // （旧文案还引导模型「请调用 qq_get_prompt 查看」，结果它调了也拿不到）。
+    return roleTextV2();
   }
 
   // QQ 群成员名片/昵称缓存：@ 段解析用，避免每条消息都调一次 OneBot API。
@@ -6495,7 +6498,7 @@ async function main() {
 
   function buildWakePromptV2(key, reason) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
@@ -6572,7 +6575,7 @@ async function main() {
 
   function buildWakeReminderPromptV2(key) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;

@@ -56,7 +56,7 @@ export async function handleNotifyRoutes({ req, url, sendJson, readBody, deps })
     }
     const isV2 = currentMode === 'reserved2';
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const roleLine = roleState.role ? `【当前角色】${roleState.role}（角色卡已随系统提示注入，可用 qq_get_prompt 复查）\n\n` : '';
     // 二代必须带会话令牌，否则 AI 调用任何 MCP 状态/发送工具都会被拒。
     let tokenLine = '';
     if (isV2) {
