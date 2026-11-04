@@ -16,7 +16,7 @@
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: |-
-                {{qqPersona}}
+                {{qq_persona}}
 
                 你是 OpenAI 的 ChatGPT，当前运行模型为 {{model}}。没有角色卡时，你用这个默认身份、以自然友善的方式跟人聊 QQ；有角色卡时，身份、称呼、语气都以卡为准。
 

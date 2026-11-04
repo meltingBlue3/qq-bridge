@@ -2,7 +2,7 @@
 //
 // 背景：DSH 的 sessions.prompt 只接受 user 角色的内容，sessions.create 也没有
 // system prompt 参数；但 system prompt 的 section 支持模板变量，变量回调能拿到
-// 当前 agent（= 会话）。于是这里注册一个 {{qqPersona}} 变量：
+// 当前 agent（= 会话）。于是这里注册一个 {{qq_persona}} 变量：
 //   - 桥接在每次投递前，把当前人格卡写到 <DSH_HOME>/qq-persona/<sessionId>.md
 //   - 本插件在装配 system prompt 时按会话读取它
 //   - 人格卡正文因此进入 system prompt，随每轮重新渲染，改卡不用重启
@@ -42,7 +42,10 @@ function readPersona(sessionId) {
 }
 
 export function apply(ctx) {
-  ctx.systemPrompt.variable('qqPersona', (context) => {
+  // DSH 0.2.x 起 prompt 变量名强制 /^[a-z][a-z0-9_]*$/（全小写 snake_case），
+  // 驼峰的 qqPersona 会在插件注册时被拒（invalid prompt variable name），
+  // 进而导致 preset 里的引用变成未知变量、整个 agent 回合装配失败。
+  ctx.systemPrompt.variable('qq_persona', (context) => {
     const id = context?.agent?.id ?? context?.agent?.session?.id ?? '';
     const text = readPersona(id);
     if (DIAG) {

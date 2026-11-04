@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PRESETS = ['qq-chat', 'qq-chat-v2'];
-const PERSONA_VARIABLE = '{{qqPersona}}';
+// DSH 0.2.x 起变量名强制全小写 snake_case（/^[a-z][a-z0-9_]*$/），驼峰名注册即被拒。
+const PERSONA_VARIABLE = '{{qq_persona}}';
 
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 const presetText = (name) => read('dsh', 'agent-presets', name, 'agent.cordis.yml');
@@ -50,7 +51,7 @@ test('人格卡走 system prompt：preset / 插件 / 桥接三方对齐', () => 
   for (const name of PRESETS) {
     assert.ok(presetText(name).includes(PERSONA_VARIABLE), `${name} 没有用 ${PERSONA_VARIABLE} 注入人格卡`);
   }
-  assert.ok(pluginText.includes("variable('qqPersona'"), 'qq-persona 插件没有注册 qqPersona 变量');
+  assert.ok(pluginText.includes("variable('qq_persona'"), 'qq-persona 插件没有注册 qq_persona 变量');
   assert.ok(pluginText.includes('context?.agent?.id'), 'qq-persona 插件没有按会话 id 取人格');
   assert.ok(bridgeText.includes('syncPersonaForSession('), '桥接没有调用 syncPersonaForSession');
   assert.ok(bridgeText.includes("'qq-persona'"), '桥接没有写 qq-persona 目录');

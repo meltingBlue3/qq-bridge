@@ -5550,7 +5550,7 @@ async function main() {
     startSocialLoop();
   }
 
-  // 人格卡走 system prompt（plugins/qq-persona 提供的 {{qqPersona}} 变量）：
+  // 人格卡走 system prompt（plugins/qq-persona 提供的 {{qq_persona}} 变量）：
   // 桥接把卡写到 <DSH_HOME>/qq-persona/<sessionId>.md，插件在装配 system prompt 时按会话读取。
   // 因此消息正文里不再拼接人格卡——历史方案（user 消息前缀）见 docs/guides/PROMPT_LAYERING.md §8。
   const PERSONA_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'qq-persona');

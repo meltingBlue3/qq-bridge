@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | **L0 DSH 基础** | DSH 自身 | system prompt | 运行时、工具调用协议、基础安全 |
 | **L1 仿真层** | `dsh/agent-presets/<preset>/agent.cordis.yml` 的 `persona.prefix` | system prompt | 机制：什么时候开口、怎么分条、工具怎么用、潜水/唤醒、安全边界 |
-| **L2 人格层** | `roles/<角色名>.md` | **system prompt**（`qq-persona` 插件按会话注入 `{{qqPersona}}`） | 身份、称呼、性格、语气、句长、标点、口头禅 |
+| **L2 人格层** | `roles/<角色名>.md` | **system prompt**（`qq-persona` 插件按会话注入 `{{qq_persona}}`） | 身份、称呼、性格、语气、句长、标点、口头禅 |
 
 L1 与 L2 的编辑成本不同：L1 改完要重新生成 patch 并重启 DSH；L2 保存后下一条消息就生效。
 **因此 L2 必须是可以随便改的那一层，L1 必须是不常动的那一层。**
@@ -68,7 +68,7 @@ roles/<角色>.md
 <DSH_HOME>/qq-persona/<sessionId>.md
       │  qq-persona 插件在装配 system prompt 时读取
       ▼
-preset 的 persona.prefix 开头：{{qqPersona}}
+preset 的 persona.prefix 开头：{{qq_persona}}
 ```
 
 规则：

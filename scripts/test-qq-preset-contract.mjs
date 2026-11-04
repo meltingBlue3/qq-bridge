@@ -18,11 +18,12 @@ const prefix = persona?.config?.prefix ?? '';
 test('reserved2 YAML resolves to the expected persona and template variables', () => {
   assert.equal(persona?.name, '@deepseek-ai/dsh-persona');
   assert.match(prefix, /\{\{model\}\}/);
-  assert.match(prefix, /\{\{qqPersona\}\}/, '人格卡必须走 qqPersona 变量注入');
+  assert.match(prefix, /\{\{qq_persona\}\}/, '人格卡必须走 qq_persona 变量注入');
   // DSH 0.2.1 起 agent loop 只注册 provider / model 两个内置提示词变量；
-  // qqPersona 由 plugins/qq-persona 注册。除此之外的未知变量会让装配直接抛错。
+  // qq_persona 由 plugins/qq-persona 注册（0.2.x 起变量名必须全小写 snake_case）。
+  // 除此之外的未知变量会让装配直接抛错。
   const used = [...prefix.matchAll(/\{\{([A-Za-z][A-Za-z0-9_]*)\}\}/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(used)].filter((v) => !['provider', 'model', 'qqPersona'].includes(v)), []);
+  assert.deepEqual([...new Set(used)].filter((v) => !['provider', 'model', 'qq_persona'].includes(v)), []);
   assert.equal(Object.hasOwn(persona.config, 'text'), false);
 });
 
