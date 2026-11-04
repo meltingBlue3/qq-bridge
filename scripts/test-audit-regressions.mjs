@@ -158,9 +158,10 @@ await test('R4 timeout/replyCheck 类暂存唤醒按定时器语义补发', asyn
     const text = h.calls.prompts[0].content.map((c) => String(c?.text ?? '')).join('\n');
     assert.match(text, /有限潜水时间已到|睡眠时间已到/);
 
-    // 第二条 @ 与未读无关但对应消息已被处理 → 仍然按消息语义跳过
+    // 第二条 @ 是点名类：即使消息已被当前回合处理掉（unread 没了）也必须补发
+    // ——「已读」只证明看过，不证明回应过；点名石沉大海比多确认一次更糟。
     const second = h.replayPendingWakeReasonsV2('group:456');
-    assert.equal(second?.action, 'skipped', '已被当前回合处理的消息类唤醒仍然跳过');
+    assert.equal(second?.action, 'replayed', '点名类唤醒不被「未读已处理」吞掉');
   } finally { await h.close(); }
 });
 

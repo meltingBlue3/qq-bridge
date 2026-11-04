@@ -14,7 +14,7 @@
 //   · 会话繁忙时暂存唤醒原因（有界 20 条），回合结束后按
 //     「消息类查 unread 水位 / 定时器类直接补排」两类语义回放。
 
-import { isTimerWakeReason, wakePriorityV2 } from './wake-policy.js';
+import { isDirectedWakeReason, isTimerWakeReason, wakePriorityV2 } from './wake-policy.js';
 
 export function createWakeScheduler({
   cfg,
@@ -277,8 +277,10 @@ export function createWakeScheduler({
   /**
    * 回合结束后补发「繁忙期间暂存」的唤醒原因。
    *
-   * 两类原因必须分开处理：
-   *   · 消息类（@/关键词/提问/私聊/拍一拍…）只有在那条消息还没被本回合处理掉时才补发
+   * 三类原因必须分开处理：
+   *   · 点名类（@/私聊/名字/拍一拍）不看 unread：已读只证明看过、不证明回应过，
+   *     即使 unread 里已找不到对应 seq 也补发；
+   *   · 其余消息类（关键词/anyMessage/概率…）只有在那条消息还没被本回合处理掉时才补发
    *     （unread 里还能找到它的 seq）；
    *   · 定时器类（timeout/replyCheck/proactiveCheck/bootstrap/admin）与未读水位无关：
    *     那一轮很可能已经把未读全部标读，用 unread 判断会让「到点唤醒」被静默吞掉 ——
@@ -287,7 +289,12 @@ export function createWakeScheduler({
   function replayPendingWakeReasons(key) {
     const st = getSocialV2State(key);
     if (!Array.isArray(st.pendingWakeReasons) || !st.pendingWakeReasons.length) return null;
-    const item = st.pendingWakeReasons.shift();
+    // 无效条目（历史脏数据/非对象）直接丢弃并继续取下一条，不占一次补发机会。
+    let item = st.pendingWakeReasons.shift();
+    while ((!item || typeof item !== 'object') && st.pendingWakeReasons.length) {
+      log(`[reserved2] ${key} 丢弃无效的暂存唤醒条目，继续取下一条`);
+      item = st.pendingWakeReasons.shift();
+    }
     if (!item || typeof item !== 'object') return null;
     if (isTimerWakeReason(item.reason)) {
       if (item.reason === 'timeout') {
@@ -305,9 +312,12 @@ export function createWakeScheduler({
       }
       return { reason: item.reason, action: 'timer' };
     }
+    // 点名类（@/私聊/名字/拍一拍）不看 unread：已读只证明看过，不证明回应过；
+    // 其余消息类仍按「unread 里还有 >= seq 的消息」判断是否被当前回合处理掉。
+    const directed = isDirectedWakeReason(item.reason);
     const stillRelevant = Array.isArray(st.unread) && st.unread.some((m) => m && Number(m.seq) >= Number(item.seq));
-    if (stillRelevant) {
-      log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}@seq${item.seq}`);
+    if (directed || stillRelevant) {
+      log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}${directed ? '（点名类：已读≠已回应）' : `@seq${item.seq}`}`);
       scheduleWake(key, item.reason);
       return { reason: item.reason, action: 'replayed' };
     }

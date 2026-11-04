@@ -165,6 +165,18 @@ export function isTimerWakeReason(reason) {
   return TIMER_WAKE_REASONS.has(String(reason ?? '').split(':')[0]);
 }
 
+/**
+ * 点名类唤醒原因：消息是**冲着机器人来的**（@/私聊/叫名字/拍一拍）。
+ * 「未读被标读」只证明看过、不证明回应过——繁忙积压回放时，这类原因即使
+ * unread 里已找不到对应 seq 也必须补发（宁可多确认一次，不能让点名石沉大海）。
+ * 非点名类（关键词/anyMessage/概率…）仍按 unread 水位判断，避免每回合末尾
+ * 都被旧消息惊动。原因可能带子类型（atMention:7），按冒号前基名判断。
+ */
+export const DIRECTED_WAKE_BASE_REASONS = Object.freeze(new Set(['private', 'atMention', 'nameMention', 'poke']));
+export function isDirectedWakeReason(reason) {
+  return DIRECTED_WAKE_BASE_REASONS.has(String(reason ?? '').split(':')[0]);
+}
+
 /** 唤醒原因里带的本地 seq（形如 `atMention@seq194`），没有就 null。 */
 export function wakeReasonSeq(reason) {
   const match = /@seq(\d+)$/.exec(String(reason ?? '').trim());

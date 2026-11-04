@@ -124,6 +124,33 @@ test('replayPendingWakeReasons：定时器类直接补排（timeout→setupSleep
   assert.equal(h3.stateFor('group:1').proactiveTimer, null, '主动机会错过即跳过，不立刻补刀');
 });
 
+test('replayPendingWakeReasons：点名类（@/私聊/名字/拍一拍）已读也补发', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: MOCK_NOW });
+  // 未读已全部被当前回合标读（unread 空、水位远超 seq）——点名类仍必须补发
+  for (const reason of ['atMention', 'atMention:7', 'private', 'nameMention', 'poke']) {
+    const h = setup();
+    const st = h.stateFor('group:1');
+    st.pendingWakeReasons = [{ reason, seq: 3 }];
+    st.unread = [];
+    st.lastUnreadSeq = 99;
+    const r = h.scheduler.replayPendingWakeReasons('group:1');
+    assert.equal(r.action, 'replayed', `${reason} 是点名类：已读≠已回应`);
+    assert.ok(st.pendingWakeTimer, `${reason} 补发走 scheduleWake`);
+  }
+  // 非点名类仍按 unread 判断：未读里没有对应 seq → skipped（防每回合被旧消息惊动）
+  const h2 = setup();
+  h2.stateFor('group:1').pendingWakeReasons = [{ reason: 'keyword:晚安', seq: 3 }];
+  h2.stateFor('group:1').unread = [];
+  h2.stateFor('group:1').lastUnreadSeq = 99;
+  assert.equal(h2.scheduler.replayPendingWakeReasons('group:1').action, 'skipped');
+  // 无效条目（历史脏数据）被丢弃并继续取下一条，不占补发机会
+  const h3 = setup();
+  h3.stateFor('group:1').pendingWakeReasons = [null, '垃圾', { reason: 'atMention', seq: 1 }];
+  const r3 = h3.scheduler.replayPendingWakeReasons('group:1');
+  assert.equal(r3?.action, 'replayed');
+  assert.equal(h3.stateFor('group:1').pendingWakeReasons.length, 0, '无效条目一并清空');
+});
+
 test('sendWakePrompt：限频延后重试；重试前消息类原因 unread 清空则跳过', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: MOCK_NOW });
   const h = setup({ wakeCfg: { maxWakePerMinute: 1 } });
