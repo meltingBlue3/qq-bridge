@@ -40,6 +40,7 @@ import { handleMemoryRoutes } from './http/memory-routes.js';
 import { handleSocialV2MiscRoutes } from './http/socialv2-misc-routes.js';
 import { handleSocialV2ReadRoutes } from './http/socialv2-read-routes.js';
 import { handleSlangRoutes } from './http/slang-routes.js';
+import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from './turn-lease.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -1865,13 +1866,6 @@ async function main() {
    * 这里给足余量；超过就认为上一次是异常退出留下的残留，允许新的等待接管。
    */
   const ACTIVE_WAIT_LEASE_MS = 15 * 60 * 1000;
-  /**
-   * 回合判忙租约：只要 `turn/start` 的结束信号（turn/end）丢了，会话就会**永久**判忙，
-   * 之后所有唤醒只进 pendingWakeReasons、QQ 上表现为「它不理我了」，只能重启（issue #11/#23/#26/#19）。
-   * 正常回合 1~3 分钟，最长工具调用（DSH 的 toolCallTimeoutMs）≈12 分钟，15 分钟足以覆盖任何
-   * **还活着**的回合。过期只是不再判忙：collector 本身保留，真回复照常 flush，只是允许新唤醒排队。
-   */
-  const TURN_BUSY_LEASE_MS = 15 * 60 * 1000;
   const turnLeaseNoted = new Set(); // 租约过期的日志去重（每个 session 只记一次）
   const pendingWakeLeaseTimers = new Map(); // key -> timeout：防止 accepted 但无 turn/end 的唤醒把 key 永久标记为 busy
   const wakeConfigUpdatedKeys = new Set();
@@ -1988,9 +1982,11 @@ async function main() {
     if (!restored) return;
     collectors.set(sessionId, collector);
     // 恢复出来的回合也必须带起始时间，否则租约对它无从生效 —— 这正是
-    // 「DSH 重启后忙标记永不复位」的那条路径（issue #19）。不知道真实起点时按现在算：
-    // 活着的回合会在 turn/end 清掉；真丢了的回合最多再忙一个租约期就自动解除。
-    if (!v2TurnStartAt.has(sessionId)) v2TurnStartAt.set(sessionId, Date.now());
+    // 「DSH 重启后忙标记永不复位」的那条路径（issue #19）。但真实起点未知，
+    // 旧实现按 now 起算 ⇒ 每次桥接重启，该会话都按满租约判忙、@ 只能排队。
+    // 这里回拨到「只剩 RESTORED_TURN_GRACE_MS 宽限」的位置：活着的回合会在
+    // turn/end 清掉；真丢了的回合最多再忙一个宽限期就自动解除。
+    if (!v2TurnStartAt.has(sessionId)) v2TurnStartAt.set(sessionId, restoredTurnStartAt(Date.now()));
     log(`重连后恢复了进行中的回合（${sessionId}，turn ${[...open].join(',')}）`);
   }
 
