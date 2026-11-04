@@ -164,7 +164,24 @@ export async function resolveSafeHost(hostname) {
   return first;
 }
 
-export async function validateFetchUrl(raw) {
+/**
+ * AI 可达媒体的抓取端口白名单：QQ 多媒体 CDN（multimedia.nt.qq.com.cn /
+ * gchat.qpic.cn / gxh.vip.qq.com 等）实际只用 80/443/8080/8443。
+ * AI 通道的媒体抓取统一传 opts.allowPorts = MEDIA_FETCH_PORTS：
+ * SSRF 防护此前只判地址不判端口，公网非常规端口可被用来探测/打洞。
+ * （内部抓取——表情库同步、语音校验等操作者路径——不受此限。）
+ */
+export const MEDIA_FETCH_PORTS = Object.freeze([80, 443, 8080, 8443]);
+
+function assertPortAllowed(url, allowPorts) {
+  if (!Array.isArray(allowPorts) || !allowPorts.length) return;
+  const port = url.port ? Number(url.port) : (url.protocol === 'https:' ? 443 : 80);
+  if (!allowPorts.includes(port)) {
+    throw new Error(`端口 ${port} 不在允许的抓取端口白名单内（仅允许 ${(allowPorts).join('/')}）`);
+  }
+}
+
+export async function validateFetchUrl(raw, opts = {}) {
   let url;
   try {
     url = new URL(String(raw ?? '').trim());
@@ -173,6 +190,8 @@ export async function validateFetchUrl(raw) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('仅允许 http/https');
   if (url.username || url.password) throw new Error('URL 不能包含凭据');
+  // 端口检查放在 DNS 之前：非法端口直接拒绝，不浪费解析也不给探测者探路信息。
+  assertPortAllowed(url, opts.allowPorts);
   const addresses = await resolveSafeAddresses(url.hostname);
   return { url, ip: addresses[0], addresses };
 }
@@ -327,16 +346,16 @@ async function requestOnce(url, addresses, limit, binary = false) {
   throw lastError ?? new Error(`请求失败：${url.hostname}`);
 }
 
-export async function safeFetch(urlString, maxChars = 50000) {
+export async function safeFetch(urlString, maxChars = 50000, opts = {}) {
   validateLimit(maxChars, 'maxChars');
   const MAX_REDIRECTS = 5;
-  let { url, addresses } = await validateFetchUrl(urlString);
+  let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, addresses, maxChars);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, addresses } = await validateFetchUrl(next));
+      ({ url, addresses } = await validateFetchUrl(next, opts)); // 重定向每一跳都要复检端口
       continue;
     }
     const body = result.body || '';
@@ -361,16 +380,16 @@ export function looksLikeImageBuffer(buf) {
 }
 
 /** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
-export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024) {
+export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024, opts = {}) {
   validateLimit(maxBytes, 'maxBytes');
   const MAX_REDIRECTS = 5;
-  let { url, addresses } = await validateFetchUrl(urlString);
+  let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, addresses, maxBytes, true);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, addresses } = await validateFetchUrl(next));
+      ({ url, addresses } = await validateFetchUrl(next, opts)); // 重定向每一跳都要复检端口
       continue;
     }
     if (result.statusCode < 200 || result.statusCode >= 300) {

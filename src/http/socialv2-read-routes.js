@@ -26,7 +26,9 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     onebotHttpAction,
     fetchMediaData,
     formatForwardResponse,
-    truncateText
+    truncateText,
+    rememberForwardMediaV2,
+    filterForwardMediaV2
   } = deps;
 
   if (req.method === 'GET' && url.pathname === '/api/socialV2/message-detail') {
@@ -166,6 +168,15 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
           nestedPreviews.push({ id: fid, error: error?.message ?? '嵌套转发读取失败' });
         }
       }
+      // 登记本层与嵌套预览里出现的媒体：forward-media 只抓「本会话真的见过」的媒体
+      // （防模型凭空编 URL 让桥接去抓；身份键与 MCP 侧一致：url > file > emojiId > faceId）。
+      const rememberMedia = (msgs) => {
+        for (const m of Array.isArray(msgs) ? msgs : []) {
+          if (m && Array.isArray(m.media) && m.media.length) rememberForwardMediaV2?.(key, m.media);
+        }
+      };
+      rememberMedia(formatted.messages);
+      for (const np of nestedPreviews) rememberMedia(np?.messages);
       sendJson({ ok: true, key, id, ...formatted, nestedPreviews });
     } catch (error) {
       log(`合并转发查询失败 ${key} ${id}: ${error?.message ?? error}`);
@@ -183,9 +194,24 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     if (req.headers['x-agent-token'] && !v2ToolEnabled('getForwardMsg')) { sendJson({ ok: false, error: '工具未启用：qq_get_forward_msg' }, 403); return true; }
     if (getCurrentMode() !== 'reserved2') { sendJson({ ok: false, error: '转发媒体读取仅 reserved2 模式可用' }, 403); return true; }
     if (!media.length) { sendJson({ ok: true, key, media: [], images: [] }); return true; }
+    // 安全边界：只抓「本会话真的见过」的媒体（转发读取时登记 / 本会话消息已入库）。
+    // 旧实现照单全收 body.media，等于给 AI 一个「帮我抓任意 URL」的原语。
+    const { allowed, denied } = filterForwardMediaV2
+      ? filterForwardMediaV2(key, media)
+      : { allowed: media, denied: [] };
+    if (!allowed.length) {
+      sendJson({ ok: false, error: '请求的媒体都不在本会话已见范围内（只能读取本会话收到的转发/消息媒体）' }, 403);
+      return true;
+    }
     try {
-      const images = await fetchMediaData(media);
-      sendJson({ ok: true, key, media, images });
+      const images = await fetchMediaData(allowed);
+      sendJson({
+        ok: true,
+        key,
+        media: allowed,
+        images,
+        ...(denied.length ? { deniedCount: denied.length, note: `${denied.length} 条媒体不在本会话已见范围内，已拒绝` } : {})
+      });
     } catch (error) {
       log(`转发媒体读取失败 ${key}:`, error?.message ?? error);
       sendJson({ ok: false, error: `转发媒体读取失败：${error?.message ?? error}` }, 500);

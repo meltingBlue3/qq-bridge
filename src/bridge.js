@@ -43,6 +43,7 @@ import { handleSlangRoutes } from './http/slang-routes.js';
 import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from './turn-lease.js';
 import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
 import { applyRecallV2 } from './social-v2/recall.js';
+import { createForwardMediaRegistry } from './social-v2/forward-media-registry.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -68,7 +69,7 @@ import { SENSITIVE_RE } from './sensitive.js';
 import { createTokenFragmentMatcher } from './token-fragment.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage, describeAge } from './qq-model-view.js';
-import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
+import { safeFetchBuffer, looksLikeImageBuffer, MEDIA_FETCH_PORTS } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
@@ -2992,7 +2993,9 @@ async function main() {
       onebotHttpAction,
       fetchMediaData,
       formatForwardResponse,
-      truncateText
+      truncateText,
+      rememberForwardMediaV2,
+      filterForwardMediaV2
     };
     const slangRouteDeps = {
       cfg,
@@ -4171,7 +4174,7 @@ async function main() {
     const tryUrls = async () => {
       for (const url of urls) {
         try {
-          const fetched = await safeFetchBuffer(url, MAX_MEDIA_BYTES);
+          const fetched = await safeFetchBuffer(url, MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_PORTS });
           const accepted = acceptImageBuffer(fetched.buffer, `${label} URL `);
           if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(url) };
           failures.push(`${url} 不是有效图片`);
@@ -4200,7 +4203,7 @@ async function main() {
         }
         if (obj.url) {
           try {
-            const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES);
+            const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_PORTS });
             const accepted = acceptImageBuffer(fetched.buffer, 'get_image URL 图片');
             if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(obj.url) };
           } catch (error) {
@@ -4243,7 +4246,7 @@ async function main() {
         const desc = face.q_des || (Array.isArray(face.emoji_name_alias) && face.emoji_name_alias[0]) || '';
         if (face.url) {
           try {
-            const fetched = await safeFetchBuffer(String(face.url), MAX_MEDIA_BYTES);
+            const fetched = await safeFetchBuffer(String(face.url), MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_PORTS });
             const accepted = acceptImageBuffer(fetched.buffer, '表情图片');
             if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(face.url), text: desc ? `[表情:${desc}]` : '' };
           } catch (error) {
@@ -4704,6 +4707,15 @@ async function main() {
   // 重复入库会推高 seq 水位、unread 里出现两条一样的消息。容量 500 覆盖重连风暴窗口；
   // 重启后 LRU 清空，由 appendSocialV2Message 里的「切片内查重」兜底。
   const v2MessageIdDedupe = createMessageIdDedupe({ capacity: 500 });
+  // forward-media 会话登记：AI 能批量抓取的媒体必须「本会话真的见过」
+  // （来源=合并转发读取时登记 + 本会话消息已入库的 media）。防模型凭空编
+  // URL 让桥接去抓；与 safe-fetch 的端口白名单构成双层 SSRF 边界。
+  const forwardMediaRegistry = createForwardMediaRegistry();
+  function rememberForwardMediaV2(key, mediaList) { forwardMediaRegistry.remember(key, mediaList); }
+  function filterForwardMediaV2(key, mediaList) {
+    const st = getSocialV2State(key);
+    return forwardMediaRegistry.filter(key, mediaList, [st?.recentMessages, st?.unread]);
+  }
 
   // 归一化“指定群友发言唤醒”名单：
   // - 只保留正整数 QQ 号（字符串形式），拒绝 null/对象/“null”/非法字符等脏数据；
