@@ -320,7 +320,9 @@ export async function handleSocialV2StickerRoutes({ req, url, sendJson, readBody
     if (req.headers['x-agent-token'] && !v2ToolEnabled('listStickers')) { sendJson({ ok: false, error: '工具未启用：qq_list_stickers' }, 403); return true; }
     try {
       const synced = await syncStickerLibrary(force);
-      const list = formatStickerList(synced?.entries ?? stickerEntries, query, count);
+      // agent 视角只看 global + 本会话条目；控制台（无令牌）全量。
+      const list = formatStickerList(synced?.entries ?? stickerEntries, query, count,
+        req.headers['x-agent-token'] ? key : '');
       sendJson({ ok: true, key, ...list, syncedAt: synced?.syncedAt ?? stickerSyncedAt, fromCache: synced?.fromCache ?? false });
     } catch (error) {
       sendJson({ ok: false, error: `获取表情列表失败：${error?.message ?? error}` }, 500);
@@ -348,7 +350,8 @@ export async function handleSocialV2StickerRoutes({ req, url, sendJson, readBody
     }
     try {
       const synced = await syncStickerLibrary(force);
-      const list = formatStickerList(synced?.entries ?? stickerEntries, query, count);
+      const list = formatStickerList(synced?.entries ?? stickerEntries, query, count,
+        req.headers['x-agent-token'] ? key : '');
       sendJson({ ok: true, key, ...list, syncedAt: synced?.syncedAt ?? stickerSyncedAt, fromCache: synced?.fromCache ?? false });
     } catch (error) {
       sendJson({ ok: false, error: `获取表情列表失败：${error?.message ?? error}` }, 500);

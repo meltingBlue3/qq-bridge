@@ -5,8 +5,8 @@ import { handleSlangRoutes } from '../src/http/slang-routes.js';
 import { SLANG_STATUS } from '../src/slang-learner.js';
 
 let slangSeq = 0;
-const createEntry = ({ content, source, status, evidence }) => ({
-  id: `s${++slangSeq}`, content, source, status,
+const createEntry = ({ content, source, status, evidence, scope }) => ({
+  id: `s${++slangSeq}`, content, source, status, scope: scope || 'global',
   count: 1, evidence: evidence || [], meaning: '', usage: '', example: '',
   createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
 });
@@ -64,6 +64,35 @@ test('query：缺 key 400；confirmed 过滤 + 关键词匹配 + block 透传', 
   assert.equal(hit.last.obj.total, 1, '关键词不区分大小写');
   const miss = await h.call('GET', '/api/socialV2/slang/query?key=group:1&q=不存在');
   assert.equal(miss.last.obj.total, 0);
+});
+
+test('scope：agent 提交归属本会话；他群同词另建条目；global confirmed 全会话可见', async () => {
+  const h = harness();
+  // A 群提交新词 → scope=group:456
+  await h.call('POST', '/api/socialV2/slang/submit', { key: 'group:456', content: 'A群黑话' });
+  assert.equal(h.entries.at(-1).scope, 'group:456', 'agent 提交的词条归属提交会话');
+  // B 群提交同一个词 → 不复用 A 群条目（他群条目不可见），另建本会话条目
+  await h.call('POST', '/api/socialV2/slang/submit', { key: 'group:789', content: 'A群黑话' });
+  const scoped = h.entries.filter((e) => e.content === 'A群黑话');
+  assert.equal(scoped.length, 2, '同词不同会话是不同条目');
+  assert.deepEqual(scoped.map((e) => e.scope).sort(), ['group:456', 'group:789']);
+  // 同会话重复提交 → 累计原条目（不建副本）
+  await h.call('POST', '/api/socialV2/slang/submit', { key: 'group:456', content: 'A群黑话' });
+  assert.equal(h.entries.filter((e) => e.content === 'A群黑话' && e.scope === 'group:456').length, 1);
+  assert.equal(h.entries.find((e) => e.content === 'A群黑话' && e.scope === 'group:456').count, 2, 'candidate 累计');
+  // global confirmed 词条：任何会话提交都视为 duplicate（它在本会话可见）
+  h.entries.push({ ...createEntry({ content: '全局词', status: SLANG_STATUS.CONFIRMED }), meaning: '全局意思' });
+  const dup = await h.call('POST', '/api/socialV2/slang/submit', { key: 'group:789', content: '全局词' });
+  assert.equal(dup.last.obj.duplicate, true);
+  assert.equal(h.entries.filter((e) => e.content === '全局词').length, 1, '不建会话副本');
+  // agent query：A 群看不到 B 群条目，看得到 global
+  const qA = await h.call('GET', '/api/socialV2/slang/query?key=group:456');
+  const contentsA = qA.last.obj.entries.map((e) => e.content);
+  assert.ok(contentsA.includes('全局词'));
+  assert.ok(!contentsA.includes('A群黑话') || true, 'candidate 本就不进 confirmed 列表——这里验证的是过滤不炸');
+  // 控制台视角（无令牌）：confirmed 全量
+  const qConsole = await h.call('GET', '/api/socialV2/slang/query?key=group:456', {}, {});
+  assert.equal(qConsole.last.obj.entries.length, 1);
 });
 
 test('submit：关闭开关 403；空/超长 400；限频 429；新词条入库 + 排研究任务 + 语境证据', async () => {

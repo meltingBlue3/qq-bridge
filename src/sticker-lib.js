@@ -47,6 +47,23 @@ export function sanitizeStickerText(value, max = 200) {
   return truncateText(cleaned, limit);
 }
 
+// ── scope 归属：表情 AI 认知（备注/标签/用法）的跨会话边界 ───────────────────
+// 备注常带「在哪个群谁用了」的语境，跨会话注入等于把 A 群的语境泄露给 B 群。
+// 归属两种：'global'（默认——QQ 同步/控制台创建）或会话 key（AI 在该会话内
+// 收藏/建条）。旧数据无 scope 按 global 兼容；非法值归一为 global。
+export function normalizeStickerScope(value) {
+  const s = String(value ?? '').trim();
+  if (!s || s === 'global') return 'global';
+  return /^(group|private):\d+$/.test(s) ? s : 'global';
+}
+
+/** entry 在 scope 视角下是否可见：global 永远可见；会话条目只在本会话可见。 */
+export function stickerVisibleInScope(entry, scope) {
+  if (!scope || scope === 'global') return true; // 未指定视角 = 全量（控制台）
+  const entryScope = normalizeStickerScope(entry?.scope);
+  return entryScope === 'global' || entryScope === scope;
+}
+
 export function normalizeStickerEntry(raw) {
   const entry = raw && typeof raw === 'object' ? raw : {};
   const id = String(entry.id || entry.emoji_id || entry.resId || '').trim();
@@ -64,6 +81,7 @@ export function normalizeStickerEntry(raw) {
     tags,
     usage: sanitizeStickerText(entry.usage, 200),
     source: entry.source === 'manual' ? 'manual' : (entry.source === 'ai' ? 'ai' : 'qq'),
+    scope: normalizeStickerScope(entry.scope),
     useCount: Math.max(0, Number(entry.useCount) || 0),
     lastUsedAt: Number(entry.lastUsedAt) || 0,
     lastContext: sanitizeStickerText(entry.lastContext, 200),
@@ -194,8 +212,10 @@ export function findSticker(entries, ref) {
 }
 
 // 格式化给 AI 看的表情列表；query 会匹配 desc/localNote/tags/usage/id/md5。
-export function formatStickerList(entries, query = '', limit = 48) {
-  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+// scope：agent 视角传会话 key（global + 本会话条目）；控制台不传（全量）。
+export function formatStickerList(entries, query = '', limit = 48, scope = '') {
+  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean)
+    .filter((e) => stickerVisibleInScope(e, scope));
   const q = String(query ?? '').trim().toLowerCase();
   const filtered = q
     ? list.filter((e) => {
@@ -230,8 +250,10 @@ export function formatStickerList(entries, query = '', limit = 48) {
 // ⚠️ 安全框定：表情库是**整个 QQ 账号共享**的一份，备注可能在别的会话里写下
 // （甚至被那个会话里的群友间接影响）。所以这一段必须被明确标成「资料」而不是「指令」，
 // 否则就成了跨会话的提示词注入通道。字段本身已在 normalizeStickerEntry 里单行化。
-export function buildStickerContext(entries, max = 8) {
-  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+export function buildStickerContext(entries, max = 8, scope = '') {
+  // scope 视角过滤：global 条目全部会话可见，会话条目只在本会话注入。
+  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean)
+    .filter((e) => stickerVisibleInScope(e, scope));
   if (!list.length) return '';
   const top = [...list]
     .sort((a, b) => (b.useCount || 0) - (a.useCount || 0) || ((b.desc || b.localNote) ? 1 : 0) - ((a.desc || a.localNote) ? 1 : 0))
@@ -276,6 +298,9 @@ export function applyStickerNote(entries, id, patch = {}) {
     localNote: patch.note !== undefined ? String(patch.note ?? '').trim() : target.localNote,
     tags: Array.isArray(patch.tags) ? patch.tags.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 20) : target.tags,
     usage: patch.usage !== undefined ? String(patch.usage ?? '').trim() : target.usage,
+    // 备注写入保留条目归属：AI 给 global 条目写备注不会悄悄把它变成会话私有，
+    // 会话条目也不会因为写备注升级成 global（归属变更必须走管理端）。
+    scope: normalizeStickerScope(target.scope),
     source: patch.source || target.source || 'ai',
     updatedAt: nowIso()
   });

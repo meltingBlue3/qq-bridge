@@ -40,6 +40,8 @@ const tests = [
   'test-send-chains.mjs',
   // 普通聊天并入投递队列：提交顺序 = 到达顺序（带图慢解析不插队）。
   'test-delivery-order.mjs',
+  // 表情/黑话 scope 归属：跨会话信息流边界（库函数 + 注入过滤）。
+  'test-scope-isolation.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。

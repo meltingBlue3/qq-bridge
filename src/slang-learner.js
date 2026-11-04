@@ -48,6 +48,24 @@ const SLANG_FIELD_MAX = 300;
 const SLANG_CONTENT_MAX = 50;
 const EVIDENCE_TEXT_MAX = 80;
 
+// ── scope 归属：跨会话信息流的边界 ──────────────────────────────────────────
+// 黑话词条的释义/用法/例句常带群号人名，跨会话注入等于把 A 群的语境泄露给
+// B 群。归属只有两种：'global'（默认，全部会话可见——管理员/控制台创建）
+// 或会话 key（'group:456'/'private:123'——AI 在该会话内创建）。
+// 旧数据无 scope 按 global 兼容；非法值一律归一为 global（fail-safe，不丢数据）。
+export function normalizeSlangScope(value) {
+  const s = String(value ?? '').trim();
+  if (!s || s === 'global') return 'global';
+  return /^(group|private):\d+$/.test(s) ? s : 'global';
+}
+
+/** entry 在 scope 视角下是否可见：global 永远可见；会话条目只在本会话可见。 */
+export function slangVisibleInScope(entry, scope) {
+  if (!scope || scope === 'global') return true; // 未指定视角 = 全量（控制台）
+  const entryScope = normalizeSlangScope(entry?.scope);
+  return entryScope === 'global' || entryScope === scope;
+}
+
 export function normalizeSlangEntry(raw) {
   const entry = raw && typeof raw === 'object' ? raw : {};
   const status = [SLANG_STATUS.CANDIDATE, SLANG_STATUS.CONFIRMED, SLANG_STATUS.REJECTED].includes(entry.status)
@@ -69,6 +87,7 @@ export function normalizeSlangEntry(raw) {
     sources: Array.isArray(entry.sources) ? entry.sources.map((s) => clip(s, SLANG_FIELD_MAX)).filter(Boolean).slice(-10) : [],
     status,
     source: entry.source === 'manual' ? 'manual' : 'ai',
+    scope: normalizeSlangScope(entry.scope),
     count: Math.max(0, Number(entry.count) || 0),
     // 证据同样要限长：它是从群聊消息里截来的原文，是文件膨胀的主要来源。
     evidence: Array.isArray(entry.evidence)
@@ -156,7 +175,7 @@ export function saveSlang(file, entries, { max = SLANG_MAX_ENTRIES } = {}) {
   return { entries: capped, dropped };
 }
 
-export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [] } = {}) {
+export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [], scope = 'global' } = {}) {
   return normalizeSlangEntry({
     content,
     meaning,
@@ -166,6 +185,7 @@ export function createSlangEntry({ content, meaning = '', usage = '', example = 
     sources,
     status,
     source,
+    scope,
     count: 1,
     evidence,
     createdAt: nowIso(),
@@ -212,9 +232,12 @@ export function mergeEvidence(current, incoming) {
   return merged.slice(-20);
 }
 
-export function buildSlangContext(entries, max = 8) {
+export function buildSlangContext(entries, max = 8, scope = '') {
+  // scope 视角过滤：global 条目全部会话可见，会话条目只在本会话注入。
+  // scope 为空 = 控制台全量视角（不过滤）。
   const confirmed = (entries || [])
     .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning)
+    .filter((e) => slangVisibleInScope(e, scope))
     .sort((a, b) => (b.count || 0) - (a.count || 0))
     .slice(0, Math.max(1, Math.min(30, Number(max) || 8)));
   if (!confirmed.length) return '';

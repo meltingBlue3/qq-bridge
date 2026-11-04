@@ -4,6 +4,8 @@
 //
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
 
+import { slangVisibleInScope } from '../slang-learner.js';
+
 /**
  * @returns {Promise<boolean>} true = 已处理
  */
@@ -83,6 +85,8 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2ToolEnabled('getPrompt')) { sendJson({ ok: false, error: '工具未启用：qq_get_prompt' }, 403); return true; }
     const st = getSocialV2State(key);
+    // agent 视角 scope：黑话/表情注入只含 global + 本会话（跨会话信息流边界）。
+    const agentScope = req.headers['x-agent-token'] ? key : '';
     // 让 prompt 里的表情摘要尽量新鲜：按 TTL 同步一次 QQ 收藏表情（失败不阻塞）。
     if (cfg.socialV2?.sticker?.enabled !== false) {
       try { await syncStickerLibrary(false); } catch {}
@@ -153,15 +157,17 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       wakeSafety: computeWakeSafetyV2(st.wakeConfig),
       memory: formatMemoryV2(st),
       participation: formatParticipationV2(st),
+      // agent 视角：黑话/表情只注入 global + 本会话条目（scope 归属见 slang-learner/
+      // sticker-lib）；控制台视角（无令牌）全量。
       slang: {
         enabled: cfg.slang?.enabled !== false,
-        entries: confirmedSlangListV2(),
-        block: buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8)
+        entries: confirmedSlangListV2().filter((e) => slangVisibleInScope(e, agentScope)),
+        block: buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8, agentScope)
       },
       stickers: {
         enabled: cfg.socialV2?.sticker?.enabled !== false,
         total: stickerEntries.length,
-        context: cfg.socialV2?.sticker?.includeInPrompt !== false ? buildStickerContext(stickerEntries, cfg.socialV2?.sticker?.promptMaxStickers ?? 8) : '',
+        context: cfg.socialV2?.sticker?.includeInPrompt !== false ? buildStickerContext(stickerEntries, cfg.socialV2?.sticker?.promptMaxStickers ?? 8, agentScope) : '',
         strategy: cfg.socialV2?.sticker?.includeInPrompt !== false ? buildStickerStrategyHint() : ''
       },
       // 语音库摘要：让 AI 一开始就知道有哪些语音可发（真发之前用 qq_list_voices 看详情）。

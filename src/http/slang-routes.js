@@ -6,7 +6,7 @@
 // 因此必须以 getSlangEntries() getter 注入，不能按引用快照。
 // 落盘与研究任务以函数注入。
 
-import { SLANG_STATUS } from '../slang-learner.js';
+import { SLANG_STATUS, slangVisibleInScope } from '../slang-learner.js';
 
 /**
  * @returns {Promise<boolean>} true = 已处理
@@ -39,7 +39,10 @@ export async function handleSlangRoutes({ req, url, sendJson, readBody, deps }) 
     if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2ToolEnabled('slangQuery')) { sendJson({ ok: false, error: '工具未启用：qq_slang_query' }, 403); return true; }
-    const list = confirmedSlangListV2().filter((e) => {
+    // agent 视角只看 global + 本会话词条（释义常带别的群的语境，跨会话注入是信息流）；
+    // 控制台（无令牌）全量。scope 与提交侧的归属规则一致。
+    const agentScope = req.headers['x-agent-token'] ? key : '';
+    const list = confirmedSlangListV2().filter((e) => slangVisibleInScope(e, agentScope)).filter((e) => {
       if (!q) return true;
       return e.content.toLowerCase().includes(q)
         || e.meaning.toLowerCase().includes(q)
@@ -51,7 +54,7 @@ export async function handleSlangRoutes({ req, url, sendJson, readBody, deps }) 
       key,
       total: list.length,
       entries: list,
-      block: buildSlangContext(getSlangEntries(), cfg.slang?.injectMax ?? 8)
+      block: buildSlangContext(getSlangEntries(), cfg.slang?.injectMax ?? 8, agentScope)
     });
     return true;
   }
@@ -69,7 +72,11 @@ export async function handleSlangRoutes({ req, url, sendJson, readBody, deps }) 
     if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return true; }
     if (content.length > 50) { sendJson({ ok: false, error: '黑话词条过长（最多 50 字）' }, 400); return true; }
     if (!allowSlangSubmit(key)) { sendJson({ ok: false, error: '黑话提交过于频繁，请稍后再试' }, 429); return true; }
-    const existing = getSlangEntries().find((e) => e.content === content);
+    // 归属：agent 提交 → 会话条目（释义语境只在本会话注入）；控制台/无令牌 → global。
+    const submitScope = req.headers['x-agent-token'] ? key : 'global';
+    // 重检测 scope-aware：同词若已有「本会话可见」的条目（global 或本会话归属）
+    // 就走累计/拒绝路径，不再建副本；仅当同词只存在于**别的会话**时才新建本会话条目。
+    const existing = getSlangEntries().find((e) => e.content === content && slangVisibleInScope(e, submitScope));
     if (existing) {
       if (existing.status === SLANG_STATUS.CONFIRMED) {
         sendJson({ ok: true, duplicate: true, status: 'confirmed', entry: publicSlangEntry(existing) });
@@ -100,6 +107,7 @@ export async function handleSlangRoutes({ req, url, sendJson, readBody, deps }) 
       content,
       source: 'ai',
       status: SLANG_STATUS.CANDIDATE,
+      scope: submitScope,
       evidence: context ? [{ key, sender: 'AI提交', text: context.slice(0, 200), time: Date.now() }] : []
     });
     getSlangEntries().push(entry);
