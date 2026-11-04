@@ -582,7 +582,7 @@ server.tool(
 
 server.tool(
   'qq_get_unread_messages',
-  '查看未读消息，不自动标记已读。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序补读；从最早未读开始传 0。',
+  '查看未读消息，不自动标记已读。默认只返回你还没见过的：快照/上次读取已展示但还没 mark_read 确认的会自动跳过（excludedShownCount 说明省略了多少条），所以它不会和快照重复。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序精确补读（分页不受去重影响）；从最早未读开始传 0。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -601,7 +601,7 @@ server.tool(
 
 server.tool(
   'qq_get_recent_messages',
-  '查看指定会话的最近消息（只读），支持 offset 扩大范围。',
+  '查看指定会话的最近消息（只读），支持 offset 扩大范围。不重复下发：唤醒快照/qq_get_unread_messages/上次 recent 已提供过的消息会自动跳过（excludedShownCount/excludedUnreadCount 说明省略了多少条，未读请用 qq_get_unread_messages 读）。所以它是「补充更早的上下文」，不是「重看一遍」。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),

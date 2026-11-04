@@ -5,6 +5,7 @@
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
 
 import { slangVisibleInScope } from '../slang-learner.js';
+import { filterUnshownRecent, isShownSeq } from '../social-v2/receipts.js';
 
 /**
  * @returns {Promise<boolean>} true = 已处理
@@ -198,10 +199,24 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     const st = getSocialV2State(key);
     // Preserve the old tail read by default; cursor paging lets a backlog
     // larger than one response be read completely, even outside recent.
-    const messages = afterSeq === null ? st.unread.slice(-limit)
+    // 会话方反馈①：agent 的默认读取（不带 afterSeq）只给还没展示过的——
+    // 已展示但仍未 mark_read 确认的不再重复下发（快照/上次读取已给过）。
+    // 显式 afterSeq 分页保持精确窗口，积压续读的契约不变。
+    const isAgent = Boolean(req.headers['x-agent-token']);
+    let baseUnread = st.unread;
+    let excludedShownCount = 0;
+    if (isAgent && afterSeq === null) {
+      const visible = st.unread.filter((m) => !(Number.isSafeInteger(m?.seq) && isShownSeq(st, m.seq)));
+      excludedShownCount = st.unread.length - visible.length;
+      baseUnread = visible;
+    }
+    const messages = afterSeq === null ? baseUnread.slice(-limit)
       : st.unread.filter((m) => Number.isSafeInteger(m.seq) && m.seq > afterSeq).slice(0, limit);
-    const readThroughSeq = req.headers['x-agent-token'] ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
-    sendJson({ ok: true, key, unreadCount: st.unread.length, messages, readThroughSeq });
+    const readThroughSeq = isAgent ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
+    sendJson({
+      ok: true, key, unreadCount: st.unread.length, messages, readThroughSeq,
+      ...(isAgent ? { excludedShownCount } : {})
+    });
     return true;
   }
 
@@ -214,11 +229,31 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2ToolEnabled('getRecent')) { sendJson({ ok: false, error: '工具未启用：qq_get_recent_messages' }, 403); return true; }
     const st = getSocialV2State(key);
-    const start = Math.max(0, st.recentMessages.length - offset - limit);
-    const end = Math.max(0, st.recentMessages.length - offset);
-    const messages = st.recentMessages.slice(start, end);
-    const readThroughSeq = req.headers['x-agent-token'] ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
-    sendJson({ ok: true, key, messages, readThroughSeq });
+    // 会话方反馈①（上下文重复烧 token）：agent 视角不再重复下发——
+    //   · 仍在未读缓冲里的消息跳过（未读有专属工具 qq_get_unread_messages；
+    //     未读工具被关闭时保留，否则这些消息就无处可看了）；
+    //   · 已端到端展示过的（快照/上次 recent/等待补发，见 social-v2/receipts.js）跳过。
+    // 控制台视角（无令牌）保持全量——控制台要的是完整历史，不是去重后的增量。
+    const isAgent = Boolean(req.headers['x-agent-token']);
+    const hideUnreadSeqs = isAgent && v2ToolEnabled('getUnread')
+      ? new Set(st.unread.map((m) => m?.seq))
+      : null;
+    // 控制台视角不参与去重：控制台要的是完整历史，不是去重后的增量。
+    const visible = isAgent
+      ? filterUnshownRecent(st, st.recentMessages, { hideUnreadSeqs })
+      : { messages: st.recentMessages, excludedShown: 0, excludedUnread: 0 };
+    const start = Math.max(0, visible.messages.length - offset - limit);
+    const end = Math.max(0, visible.messages.length - offset);
+    const messages = visible.messages.slice(start, end);
+    const readThroughSeq = isAgent ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
+    sendJson({
+      ok: true,
+      key,
+      messages,
+      readThroughSeq,
+      excludedShownCount: visible.excludedShown,
+      excludedUnreadCount: visible.excludedUnread
+    });
     return true;
   }
 

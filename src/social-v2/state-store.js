@@ -66,6 +66,8 @@ export function createSocialV2StateStore({
         lastUnreadSeq: 0,
         lastReadThroughSeq: 0,
         modelSeenSeqs: new Set(),
+        // 已展示回执（social-v2/receipts.js）：进程内、不落盘——重启后模型重新拉取。
+        modelShownSeqs: [],
         activeTopics: [],
         pendingThoughts: [],
         memberImpressions: {}
@@ -135,6 +137,7 @@ export function createSocialV2StateStore({
             lastReadThroughSeq: Number.isSafeInteger(val.lastReadThroughSeq) && val.lastReadThroughSeq >= 0
               ? Math.min(val.lastReadThroughSeq, Number(val.lastUnreadSeq) || 0) : 0,
             modelSeenSeqs: new Set(),
+            modelShownSeqs: [],
             activeTopics: Array.isArray(val.activeTopics) ? val.activeTopics : [],
             pendingThoughts: Array.isArray(val.pendingThoughts) ? val.pendingThoughts : [],
             memberImpressions: (() => {

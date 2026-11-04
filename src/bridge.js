@@ -44,6 +44,7 @@ import { RESTORED_TURN_GRACE_MS, TURN_BUSY_LEASE_MS, restoredTurnStartAt } from 
 import { createMessageIdDedupe } from './social-v2/message-id-dedupe.js';
 import { applyRecallV2 } from './social-v2/recall.js';
 import { createForwardMediaRegistry } from './social-v2/forward-media-registry.js';
+import { isShownSeq, pruneShownSeqs, rememberShownSeqs } from './social-v2/receipts.js';
 import { handleSendRoutes } from './http/send-routes.js';
 import {
   computeWakeSafetyV2,
@@ -6351,6 +6352,11 @@ async function main() {
     for (const msg of messages) {
       if (Number.isSafeInteger(msg?.seq) && msg.seq > 0 && unread.has(msg.seq)) st.modelSeenSeqs.add(msg.seq);
     }
+    // 已展示回执（social-v2/receipts.js）：凡端到端给过模型的消息都记进来，
+    // recent 路由/下一回合快照据此跳过，不再重复下发（会话方反馈①：同批消息
+    // 在快照/未读/最近里重复出现烧 token）。与 modelSeenSeqs（已读确认凭证）语义不同。
+    rememberShownSeqs(st, messages);
+    pruneShownSeqs(st);
     return readThroughSeqV2(st);
   }
 
@@ -6471,6 +6477,11 @@ async function main() {
     const newestIncoming = [...(Array.isArray(st.unread) ? st.unread : [])].reverse()
       .find((m) => m && !m.isSelf) || null;
     const newestAgo = newestIncoming ? describeAge(newestIncoming.time, now) : '';
+    // 已展示回执（social-v2/receipts.js）：之前回合已端到端给过模型、但还没 mark_read
+    // 确认的未读，快照不再重复下发——内容仍在这个 DSH 会话的上下文里，重发只是烧 token。
+    // 回执只在投递被接受后登记，投递失败的消息绝不会因此被跳过。
+    const pendingUnread = (Array.isArray(st.unread) ? st.unread : [])
+      .filter((m) => !Number.isSafeInteger(m.seq) || !isShownSeq(st, m.seq));
     const packet = {
       messages: [],
       recent: [],
@@ -6480,28 +6491,34 @@ async function main() {
       unreadCount: st.unread.length,
       includedUnreadCount: 0,
       readThroughSeq: readThroughSeqV2(st),
-      partial: st.unread.length > 0
+      partial: pendingUnread.length > 0
     };
     const tryAdd = (field, msg) => {
       const previousThrough = packet.readThroughSeq;
       packet[field].push(compactModelMessage(msg, { now }));
       packet.includedUnreadCount = packet.messages.length;
       packet.readThroughSeq = readThroughSeqV2(st, [...packet.messages, ...packet.recent]);
-      packet.partial = packet.messages.length < st.unread.length;
+      packet.partial = packet.messages.length < pendingUnread.length;
       if (JSON.stringify(packet).length <= maxChars) return true;
       packet[field].pop();
       packet.includedUnreadCount = packet.messages.length;
       packet.readThroughSeq = previousThrough;
-      packet.partial = packet.messages.length < st.unread.length;
+      packet.partial = packet.messages.length < pendingUnread.length;
       return false;
     };
     if (v2ToolEnabled('getUnread')) {
       // Oldest unread first: a budget cutoff must not silently acknowledge unseen messages.
-      for (const msg of st.unread.slice(0, maxUnread)) if (!tryAdd('messages', msg)) break;
+      for (const msg of pendingUnread.slice(0, maxUnread)) if (!tryAdd('messages', msg)) break;
     }
     if (v2ToolEnabled('getRecent') && maxRecent > 0) {
       const unread = new Set(st.unread.map((m) => m.seq));
-      const recent = st.recentMessages.filter((m) => !Number.isSafeInteger(m.seq) || !unread.has(m.seq)).slice(-maxRecent);
+      // 上一回合已展示过的 recent 不再重复下发（回执见 social-v2/receipts.js）；
+      // 仍在未读里的也不放 recent（未读有自己的展示面），只补更早的上下文。
+      const recent = st.recentMessages.filter((m) => {
+        if (!Number.isSafeInteger(m.seq)) return true;
+        if (unread.has(m.seq)) return false;
+        return !isShownSeq(st, m.seq);
+      }).slice(-maxRecent);
       for (const msg of recent.reverse()) if (!tryAdd('recent', msg)) break;
       packet.recent.reverse();
     }

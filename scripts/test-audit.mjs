@@ -42,6 +42,8 @@ const tests = [
   'test-message-ref-docs.mjs',
   // 普通聊天并入投递队列：提交顺序 = 到达顺序（带图慢解析不插队）。
   'test-delivery-order.mjs',
+  // 已展示回执（会话方反馈①）：快照/未读/最近不再重复下发同一条消息。
+  'test-model-receipts.mjs',
   // 表情/黑话 scope 归属：跨会话信息流边界（库函数 + 注入过滤）。
   'test-scope-isolation.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
