@@ -298,9 +298,13 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
         poke: normalizeTriggerBool('poke', current.triggers.poke === true),
         keywords: nextKeywords
       },
+      // batchWindowMs：AI 显式传（≥1000）才覆盖；不传时跟随**全局**配置
+      // （cfg.socialV2.wake.batchWindowMs，与 defaultWakeConfigV2 的默认来源一致），
+      // 而不是沿用会话旧值——否则会话一旦设置过，管理员调全局合并窗口就永远不生效
+      // （旧值被逐字回写钉死）。
       batchWindowMs: Number.isFinite(Number(input.batchWindowMs)) && Number(input.batchWindowMs) >= 1000
         ? Math.min(3600000, Math.round(Number(input.batchWindowMs)))
-        : current.batchWindowMs
+        : Math.max(1000, Number(cfg.socialV2?.wake?.batchWindowMs) || 8000)
     };
     // 从 active 切回 diving 时，若 AI 没显式保留 anyMessage，则清除，避免“潜水=每条都唤醒”的语义矛盾。
     if (next.mode === 'diving' && !('anyMessage' in inputTriggers)) {

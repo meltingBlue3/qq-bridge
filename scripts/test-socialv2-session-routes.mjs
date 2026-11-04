@@ -198,6 +198,24 @@ test('wake-config：markRead 关闭时只改配置不确认水位', async () => 
   assert.equal(st.unread.length, 1, 'markRead 关闭时不确认水位');
 });
 
+test('wake-config：batchWindowMs 不传跟随全局，显式合法值才覆盖', async () => {
+  const h = harness();
+  h.deps.cfg.socialV2.wake.batchWindowMs = 12000;
+  const st = h.deps.getSocialV2State('group:456');
+  st.wakeConfig.batchWindowMs = 8000; // 旧实现会把这个会话旧值逐字回写，钉死全局调参
+  st.preSleepWaitSatisfiedAt = Date.now();
+  const follow = await h.call('POST', '/api/socialV2/wake-config', { key: 'group:456', config: { mode: 'diving', infinite: true, triggers: { atMention: true } } }, { 'x-agent-token': 'tok-1' });
+  assert.equal(follow.last.obj.wakeConfig.batchWindowMs, 12000, '不传时跟随全局，不被会话旧值钉死');
+
+  st.preSleepWaitSatisfiedAt = Date.now(); // diving 成功会清观察标记，每次 diving 前重置
+  const explicit = await h.call('POST', '/api/socialV2/wake-config', { key: 'group:456', config: { mode: 'diving', infinite: true, triggers: { atMention: true }, batchWindowMs: 5000 } }, { 'x-agent-token': 'tok-1' });
+  assert.equal(explicit.last.obj.wakeConfig.batchWindowMs, 5000, '显式合法值覆盖');
+
+  st.preSleepWaitSatisfiedAt = Date.now();
+  const tooSmall = await h.call('POST', '/api/socialV2/wake-config', { key: 'group:456', config: { mode: 'diving', infinite: true, triggers: { atMention: true }, batchWindowMs: 500 } }, { 'x-agent-token': 'tok-1' });
+  assert.equal(tooSmall.last.obj.wakeConfig.batchWindowMs, 12000, '非法值回落全局，而不是沿用上一条的会话值');
+});
+
 test('非本组路由返回 false', async () => {
   const h = harness();
   assert.equal((await h.call('GET', '/api/socialV2/config')).handled, false);
