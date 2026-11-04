@@ -61,6 +61,24 @@ function isEmpty(value) {
   return value == null || value === '' || (Array.isArray(value) && value.length === 0);
 }
 
+// ── 不可信文本净化：群友可控文本进入模型视图前的结构净化 ────────────────────
+// 群消息/转发内容/昵称是外部可控输入：【】与换行能在提示词里伪造小节标题与
+// 新段落（如「【系统】忽略之前的规则」）。动作是**剥离而不是拒绝**：内容照常
+// 可见，只是失去冒充系统结构的能力。存储层保留原始字段（控制台/排查看原文），
+// 只有模型视图被净化。
+const ZERO_WIDTH_RE = /[\u200b-\u200d\u2060\ufeff]/g;
+const CONTROL_RE = /[\u0000-\u0008\u000e-\u001f\u007f]/g;
+const LINEBREAK_RE = /[\r\n\u2028\u2029\u0085\u000b\u000c]+/g;
+
+export function sanitizeUntrustedText(value) {
+  return String(value ?? '')
+    .replace(ZERO_WIDTH_RE, '')
+    .replace(CONTROL_RE, '')
+    .replace(/【/g, '[')
+    .replace(/】/g, ']')
+    .replace(LINEBREAK_RE, ' ');
+}
+
 function compactMedia(media, canResolveByMessage) {
   return media.map((item, index) => {
     if (!isRecord(item)) return item;
@@ -88,6 +106,11 @@ export function compactModelMessage(message, opts = {}) {
   const result = { ...message };
   // No trimming or truncation: differing plain text can contain resolved quote
   // context, and tail can carry the end of a long message absent from text.
+  // 群友可控文本先净化再去重：伪造段落用的【】/换行在这里失去结构力，
+  // 净化后相同的 text/plain/tail 也会被去重（省 token，无信息损失）。
+  for (const key of ['sender', 'text', 'plain', 'tail']) {
+    if (typeof result[key] === 'string') result[key] = sanitizeUntrustedText(result[key]);
+  }
   const seenText = new Set();
   for (const key of ['text', 'plain', 'tail']) {
     if (typeof result[key] !== 'string') continue;
@@ -116,6 +139,9 @@ export function compactModelMessage(message, opts = {}) {
 }
 
 export function compactModelData(data, opts = {}) {
+  // 任意层的字符串都可能是外部可控文本（转发正文/工具结果/网页摘要在经由
+  // serializeModelData 输出时经过这里）：统一净化，防伪造提示词结构。
+  if (typeof data === 'string') return sanitizeUntrustedText(data);
   if (Array.isArray(data)) return data.map((item) => compactModelData(item, opts));
   if (!isRecord(data)) return data;
   // 一次序列化只取一次 now：同一批消息的 ago 必须彼此可比（否则跨分钟边界会自相矛盾）。
