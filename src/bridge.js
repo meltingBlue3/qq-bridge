@@ -5368,6 +5368,10 @@ async function main() {
     } else if (accepted.result.value.command?.text && opts.silent && opts.farewell) {
       social.exitingSessions.delete(sessionId);
     }
+    // ack：普通聊天路径的确认消息（命令回合不发，与旧内联行为一致）。
+    if (opts.ack && cfg.ackMessage && currentMode !== 'reserved2' && !accepted.result.value.command?.text) {
+      await sendToQQ(key, cfg.ackMessage);
+    }
     return { ok: true };
   }
 
@@ -6971,40 +6975,12 @@ async function main() {
       return;
     }
 
-    let sessionId;
-    try {
-      sessionId = await ensureSession(key);
-    } catch (error) {
-      if (String(error?.message ?? error).includes('会话创建期间已重置')) {
-        enqueueForRetry(key, promptText, { media: mediaList });
-        return;
-      }
-      throw error;
-    }
-    let content = [{ type: 'text', text: withSlangContext(promptText) }];
-    if (Array.isArray(mediaList) && mediaList.length > 0) {
-      const imageParts = await resolveMediaList(mediaList);
-      content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
-    }
-    if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
-    const accepted = await api.sessions.prompt({
-      sessionId,
-      mode: 'queue',
-      content
-    });
-    if (!accepted.result.ok) {
-      const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
-      const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
-      await sendToQQ(key, `⚠️ 消息未被接受：${safeErrText}`);
-      return;
-    }
-    if (accepted.result.value.command) {
-      // 斜杠命令直接有结果，不走模型
-      if (accepted.result.value.command.text) await auditAndSend(key, mdToPlain(accepted.result.value.command.text));
-      return;
-    }
-    if (cfg.ackMessage && currentMode !== 'reserved2') await sendToQQ(key, cfg.ackMessage);
-    log(`已投递 ${key}: ${promptText.slice(0, 80)}${promptText.length > 80 ? '…' : ''}`);
+    // 普通聊天并入 per-session 投递队列（与唤醒/社交/通知同一条 FIFO）：
+    // 旧实现内联直投——图片解析是慢异步，后到的纯文本会先于前一条带图消息提交
+    // （提交顺序 ≠ 到达顺序，模型看到的对话顺序错乱）。队列内串行后顺序即到达序。
+    // ack=true 保留 chat 模式的确认消息；命令/报错处理都在 deliverPromptNow 里。
+    const result = await deliverPrompt(key, promptText, { media: mediaList, ack: true });
+    if (result && result.ok === false) return; // 未被接受：deliverPromptNow 已提示
   }
 
   // 取消/拒绝一个挂起的提问或审批，并给 DSH 回执（超时、被新请求覆盖时使用）
