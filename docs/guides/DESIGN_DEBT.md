@@ -168,3 +168,19 @@ vs 上游单体），二是上游已改为 PolyForm-Noncommercial 许可，复�
 > 结论：上游 10-31 安全审计批次里**用户可感知的功能/安全面已全部吸收**（17 项，
 > 每项独立提交+直测）。剩余项要么是纯防御加固，要么是 L 级可靠性工程且触发条件
 > 尚未出现——留作后续轮次，见上表。
+
+## 会话方反馈吸收（2026-11-05，QQ 使用方实测痛点）
+
+QQ 侧长期使用者反馈 5 个问题，逐项修复（每项独立提交 + 直测）：
+
+| 提交 | 反馈 | 内容 |
+| --- | --- | --- |
+| `54e2053` | ② seq/messageId 双 ID 易填错 | 后端其实早已全双寻址（reply/detail/images 都按 seq 命中），缺的只是没人告诉模型——MCP 描述统一声明「QQ 消息 id 或本地 seq 皆可，桥接自动换算」，唤醒提示词【引用】段同步 |
+| `fbb8fed` | ① 快照/未读/最近重复出现烧 token | 新增**已展示回执**（`src/social-v2/receipts.js`，进程内、投递被接受才登记）：唤醒快照的未读与 recent 切片、unread 默认读取、recent 路由全部跳过已展示的；未 mark_read 的积压不再每回合重发全文；显式 afterSeq 分页保持精确窗口 |
+| `2191932` | ③ unreadCount 与 readThroughSeq 对不上（显示 9 条其实 1 条新） | **双口径**：`unreadCount`=缓冲总量（含已展示待确认），`newUnreadCount`=调用时还没见过的；快照 XML/state/prompt/unread/wait/mark-read 全部并列两个数，提示词写「未读 N 条（新 M）」 |
+| `abbd814` | ⑤ 沉睡前强制等 5 分钟太磨人 | 观察窗口**按活跃度自适应**（10 分钟内来信 ≥6 条保满、3-5 条减半、≤2 条缩到 1/5；地板 `preSleepWaitMinMs` 默认 60s）+ 显式配置 `preSleepWaitMs` 是上限（自适应只缩短）；preset/MCP 去掉硬编码 300000，改指向返回的 hint |
+| `b01844b` | ④ 动图抽帧依赖 ffmpeg | **纯 JS GIF 解码 + PNG 编码**（`src/media/gif-decode.js` / `png-encode.js` / `gif-mosaic.js`，零依赖）：ffmpeg 缺失/失败时 animate 路径自动兜底，动图表情不再只剩首帧 |
+
+> 设计取舍：已展示回执**不落盘**（重启后模型重新拉取，与 readThrough 凭证分开）；
+> recent 去重只对 agent 生效（控制台要全量历史）；自适应窗口**只缩短不拉长**
+> （测试把窗口配成几百毫秒时语义不变）。
