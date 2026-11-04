@@ -104,13 +104,43 @@ export function isSleepingConfigV2(wc) {
   return true;
 }
 
+/**
+ * 沉睡前观察窗口（会话方反馈⑤：固定 5 分钟太磨人，改成可配置 + 按活跃度自适应）。
+ *
+ * 原则：
+ *  · **显式配置是上限**——preSleepWaitMs 是最长窗口，自适应只会缩短、绝不拉长；
+ *    测试或强力用户把窗口配成几百毫秒时，行为与改动前完全一致。
+ *  · 热闹的会话风险高（对方很可能马上回话），保留长窗口；
+ *    冷清的会话（10 分钟内 ≤2 条来信）大概率人已经走了，短窗口就够——
+ *    最后一条来信距今已超过窗口时，preSleepWaitBlockedV2 本来就会立即放行。
+ *  · 档位：≥6 条来信/10min → base；3–5 条 → base/2；≤2 条 → base/5。
+ *  · preSleepWaitMinMs 是自适应地板（默认 60s），被 base 封顶；
+ *    preSleepWaitEnabled=false / 明确告别的旁路在 preSleepWaitBlockedV2 里不变。
+ */
+export function preSleepWaitWindowMsV2(st, wakeCfg = {}, now = Date.now()) {
+  const w = wakeCfg && typeof wakeCfg === 'object' ? wakeCfg : {};
+  const base = Math.max(0, Number(w.preSleepWaitMs) || 300000);
+  if (base <= 0) return 0;
+  const floorMs = Math.max(0, Number(w.preSleepWaitMinMs) || 60000);
+  const recent = Array.isArray(st?.recentMessages) ? st.recentMessages : [];
+  const inbound10m = recent.filter((m) => m && !m.isSelf
+    && Number.isFinite(Number(m.time))
+    && now - Number(m.time) >= 0
+    && now - Number(m.time) < 600000).length;
+  const scaled = inbound10m >= 6 ? base
+    : inbound10m >= 3 ? Math.round(base / 2)
+      : Math.round(base / 5);
+  return Math.min(base, Math.max(floorMs, scaled));
+}
+
 /** 沉睡前强制观察是否仍阻挡收尾；wakeCfg = cfg.socialV2.wake。 */
 export function preSleepWaitBlockedV2(st, wakeCfg = {}, now = Date.now()) {
   if (!st) return false;
   const w = wakeCfg && typeof wakeCfg === 'object' ? wakeCfg : {};
   if (w.preSleepWaitEnabled === false) return false;
   if (hasExplicitEndV2(st)) return false;
-  const waitMs = Math.max(0, Number(w.preSleepWaitMs) || 300000);
+  // 窗口按会话活跃度自适应（见 preSleepWaitWindowMsV2）。
+  const waitMs = preSleepWaitWindowMsV2(st, w, now);
   if ((st.lastIncomingAt || 0) && now - st.lastIncomingAt >= waitMs) return false;
   if (st.preSleepWaitSatisfiedAt && (!st.lastIncomingAt || st.lastIncomingAt <= st.preSleepWaitSatisfiedAt)) return false;
   if (st.preSleepWaitObservedAt && (!st.lastIncomingAt || st.lastIncomingAt <= st.preSleepWaitObservedAt)) return false;

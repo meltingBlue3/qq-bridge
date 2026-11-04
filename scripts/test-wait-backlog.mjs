@@ -168,7 +168,7 @@ await test('短等待不算沉睡前观察：canSleepNow=false 且 hint 给出�
     assert.equal(result.status, 200);
     assert.equal(result.data.canSleepNow, false, '刚发过消息不可能立刻放行');
     assert.equal(result.data.countsAsObservation, false, 'timeoutMs < 观察窗口 ⇒ 不算观察');
-    assert.match(result.data.hint, /qq_wait_for_messages\(timeoutMs=180000\)/, '必须给出该发的准确参数');
+    assert.match(result.data.hint, /qq_wait_for_messages\(timeoutMs=\d+\)/, '必须给出该发的准确参数（窗口按活跃度自适应，数值随会话状态变化）');
     assert.match(result.data.hint, /不达标/, '要点明本次不达标');
     assert.match(result.data.hint, /还需约 \d+ 秒/, '要给出还差多少秒');
   }, { wake: { preSleepWaitEnabled: true, preSleepWaitMs: 180000 } });

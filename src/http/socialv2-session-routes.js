@@ -6,6 +6,7 @@
 
 import { slangVisibleInScope } from '../slang-learner.js';
 import { countUnseenUnread, filterUnshownRecent, isShownSeq } from '../social-v2/receipts.js';
+import { preSleepWaitWindowMsV2 } from '../social-v2/wake-policy.js';
 
 /**
  * @returns {Promise<boolean>} true = 已处理
@@ -279,7 +280,8 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     // 如果当前已经是“潜水”唤醒配置，且最近还有对话/刚被唤醒，不允许用 mark_read 直接回到潜水；
     // 必须先等够沉睡前观察窗口，避免“聊两句又去潜水”。
     if (isSleepingConfigV2(st.wakeConfig) && preSleepWaitBlockedV2(st)) {
-      const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
+      // 窗口按活跃度自适应（与 preSleepWaitBlockedV2 同一函数），remaining 才不撒谎。
+      const preSleepMs = preSleepWaitWindowMsV2(st, cfg.socialV2?.wake ?? {});
       const remaining = Math.max(0, preSleepMs - ((st.lastIncomingAt || 0) ? Date.now() - st.lastIncomingAt : 0));
       const remainMin = Math.ceil(remaining / 60000);
       sendJson({
@@ -420,7 +422,8 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     }
     // 沉睡前强制观察窗口：除非对方明确结束、或已经安静/等待足够时间，否则不允许 AI 聊两句就设置潜水。
     if (isSleepingConfigV2(next) && preSleepWaitBlockedV2(st)) {
-      const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
+      // 窗口按活跃度自适应（与 preSleepWaitBlockedV2 同一函数），remaining 才不撒谎。
+      const preSleepMs = preSleepWaitWindowMsV2(st, cfg.socialV2?.wake ?? {});
       const remaining = Math.max(0, preSleepMs - ((st.lastIncomingAt || 0) ? Date.now() - st.lastIncomingAt : 0));
       const remainMin = Math.ceil(remaining / 60000);
       sendJson({

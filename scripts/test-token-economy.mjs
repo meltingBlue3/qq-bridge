@@ -103,7 +103,9 @@ await test('a late slice cannot authorize clearing an earlier unseen message', a
   const denied = await request('mark-read', { body: { throughSeq: 2 } });
   assert.equal(denied.status, 400);
   assert.deepEqual(seqs(st.unread), [1, 2]);
-  const older = await request('recent', { query: '&limit=1&offset=1' });
+  // F1 之后 recent 对 agent 不再重复下发已展示的，也不再越界展示未读缓冲成员——
+  // seq 1 属于未读面：从最早未读用 afterSeq=0 显式分页读它，读完水位才推进到 2。
+  const older = await request('unread', { query: '&afterSeq=0&limit=1' });
   assert.deepEqual(seqs(older.data.messages), [1]);
   assert.equal(older.data.readThroughSeq, 2);
   const marked = await request('mark-read', { body: { throughSeq: older.data.readThroughSeq } });

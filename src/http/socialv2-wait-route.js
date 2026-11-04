@@ -10,6 +10,7 @@
 
 import { looksLikeUnfinished } from '../v2-wait.js';
 import { countUnseenUnread } from '../social-v2/receipts.js';
+import { preSleepWaitWindowMsV2 } from '../social-v2/wake-policy.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -157,7 +158,10 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
       sendJson({ ok: false, error: '等待期间会话已重置或权限已变化，请重新读取会话' }, 403);
       return true;
     }
-    const preSleepWaitMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
+    // 会话方反馈⑤：观察窗口按会话活跃度自适应（wake-policy.preSleepWaitWindowMsV2），
+    // 显式配置的 preSleepWaitMs 是上限。这里取**等待结束时**的窗口：等待期间来过新消息
+    // 会把活跃度推向更长的档位，闸门判定与给模型的建议参数保持同一口径。
+    const preSleepWaitMs = preSleepWaitWindowMsV2(st, cfg.socialV2?.wake ?? {});
     // 闸门状态只算一次：既用于 preSleepWaitRemainingMs，也用于下面直接告诉模型"现在能不能收尾"。
     const preSleepBlocked = preSleepWaitBlockedV2(st);
     const preSleepRemainingMs = preSleepBlocked

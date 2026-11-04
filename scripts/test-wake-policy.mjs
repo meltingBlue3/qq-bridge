@@ -11,6 +11,7 @@ import {
   normalizeSpeakerIdsV2,
   pickWakeTriggersV2,
   preSleepWaitBlockedV2,
+  preSleepWaitWindowMsV2,
   refreshDefaultWakeConfigV2,
   wakePriorityV2,
   wakeReasonSeq
@@ -59,6 +60,57 @@ test('preSleepWaitBlockedV2 覆盖静默已满 / 已观察 / 明确结束 / 关�
   assert.equal(preSleepWaitBlockedV2({ ...base, lastIncomingAt: 0, preSleepWaitObservedAt: 500 }, { preSleepWaitMs: 1000 }, 3000), false);
   assert.equal(preSleepWaitBlockedV2(base, { preSleepWaitEnabled: false }, 3000), false);
   assert.equal(preSleepWaitBlockedV2({ ...base, lastIncomingAt: 0, recentMessages: [{ isSelf: false, text: '晚安' }] }, { preSleepWaitMs: 1000 }, 3000), false);
+});
+
+// ── 会话方反馈⑤：观察窗口按活跃度自适应，显式配置是上限 ──────────────────
+const now = 1_000_000;
+const inbound = (ageMs, isSelf = false) => ({ isSelf, time: now - ageMs, text: 'x' });
+
+test('preSleepWaitWindowMsV2：冷清会话缩窗、热闹会话保满、自适应只缩短不拉长', () => {
+  const cfg = { preSleepWaitMs: 300000 };
+  // 冷清（≤2 条/10min）：base/5，不高于地板 60s
+  assert.equal(preSleepWaitWindowMsV2({ recentMessages: [inbound(60000)] }, cfg, now), 60000);
+  assert.equal(preSleepWaitWindowMsV2({ recentMessages: [] }, cfg, now), 60000);
+  // 中等（3–5 条）：base/2
+  assert.equal(
+    preSleepWaitWindowMsV2({ recentMessages: [inbound(1), inbound(2), inbound(3)] }, cfg, now), 150000
+  );
+  // 热闹（≥6 条）：保满 base
+  assert.equal(
+    preSleepWaitWindowMsV2({ recentMessages: Array.from({ length: 6 }, (_, i) => inbound(i + 1)) }, cfg, now),
+    300000
+  );
+  // 自消息不算活跃度；10 分钟外的来信不算
+  assert.equal(
+    preSleepWaitWindowMsV2({ recentMessages: [inbound(1000, true), inbound(700000), inbound(800000)] }, cfg, now),
+    60000
+  );
+});
+
+test('preSleepWaitWindowMsV2：显式配置是上限，小窗口不被地板拉高', () => {
+  // 测试/强力用户把窗口配成 200ms：自适应档位都不该把它拉高（否则既有语义全变）
+  const tiny = { preSleepWaitMs: 200 };
+  assert.equal(preSleepWaitWindowMsV2({ recentMessages: [] }, tiny, now), 200);
+  assert.equal(
+    preSleepWaitWindowMsV2({ recentMessages: Array.from({ length: 8 }, (_, i) => inbound(i + 1)) }, tiny, now),
+    200
+  );
+  // 地板可配：preSleepWaitMinMs=0 时冷清档就是 base/5
+  const noFloor = { preSleepWaitMs: 300000, preSleepWaitMinMs: 0 };
+  assert.equal(preSleepWaitWindowMsV2({ recentMessages: [] }, noFloor, now), 60000);
+  // preSleepWaitMs=0 按仓库既有约定回落默认 300000（`|| 300000`，见 session-routes/
+  // wait-route 的旧实现）；真想关闭走 preSleepWaitEnabled=false。
+  assert.equal(preSleepWaitWindowMsV2({}, { preSleepWaitMs: 0 }, now), 60000);
+});
+
+test('preSleepWaitBlockedV2 与自适应窗口联动：冷清会话安静更久即放行', () => {
+  const cfg = { preSleepWaitMs: 300000 };
+  // 冷清会话窗口 60s：最后来信 61s 前 → 放行（旧实现要等满 300s）
+  const quiet = { lastIncomingAt: now - 61000, preSleepWaitSatisfiedAt: 0, preSleepWaitObservedAt: 0, recentMessages: [inbound(61000)] };
+  assert.equal(preSleepWaitBlockedV2(quiet, cfg, now), false, '冷清会话 61s 静默就该放行');
+  // 热闹会话窗口仍 300s：61s 静默不放行
+  const lively = { lastIncomingAt: now - 61000, preSleepWaitSatisfiedAt: 0, preSleepWaitObservedAt: 0, recentMessages: Array.from({ length: 6 }, (_, i) => inbound(61000 + i)) };
+  assert.equal(preSleepWaitBlockedV2(lively, cfg, now), true, '热闹会话仍需等满长窗口');
 });
 
 test('isSleepingConfigV2 / isWakeableConfigV2 / computeWakeSafetyV2', () => {

@@ -78,7 +78,10 @@ test('snapshots are optional, partial snapshots require reading, and watermarks 
 test('one closing action can acknowledge the read watermark after the full observation', () => {
   assert.match(prefix, /qq_mark_read\(throughSeq=/);
   assert.match(prefix, /qq_set_wake_config\(config=新配置, throughSeq=/);
-  assert.match(prefix, /qq_wait_for_messages\(timeoutMs=300000\)/);
+  // 会话方反馈⑤：窗口按活跃度自适应，preset 不再硬编码 timeoutMs=300000，
+  // 改为指向工具返回的 preSleepWaitMs / hint。
+  assert.match(prefix, /timeoutMs 用等待返回里的 preSleepWaitMs 或 hint 给出的值/);
+  assert.match(prefix, /按会话活跃度自适应/);
   assert.match(prefix, /canSleepNow/);
   assert.match(prefix, /countsAsObservation/);
   assert.match(prefix, /不用短等待替代/);
