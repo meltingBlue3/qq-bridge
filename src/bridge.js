@@ -6641,10 +6641,13 @@ async function main() {
     const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');
     const roleState = readRoleState();
 
-    // 若该会话有挂起的提问/审批，先当作回答处理（用当前消息自己的文字，不含引用原文）。
-    // 审批只有管理员消息会被消费；群友消息不能因为“审批挂起”而被吞掉，应继续走正常处理。
+    // 若该会话有挂起的提问/审批，只有**管理员**的消息会被当作权威回答消费。
+    // 旧实现：审批本来就只要 owner，但提问对任何群友开放——群友的一句普通闲聊
+    // 会被当成权威回执提交给 DSH（且这条消息不再走正常管线），等于挂起问题
+    // 可以被任何群友诱导消费。收紧后：非管理员消息照常进正常管线，挂起保持，
+    // 由管理员（或会话内工具面）来回答。
     const p = pending.get(key);
-    if (p && (p.kind === 'question' || isOwner)) {
+    if (p && isOwner) {
       await handlePendingAnswer(p, plainContent, key, isOwner);
       return;
     }

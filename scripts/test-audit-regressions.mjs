@@ -487,6 +487,43 @@ await test('R18 出站文本含令牌片段（≥12 连续字符）必须被拦�
   } finally { await h.close(); }
 });
 
+// ── R19. 挂起提问只消费管理员消息（owner 门） ────────────────────────────────
+// 旧实现：提问挂起期间，任何群友的一句普通闲聊都会被当成权威回执提交给 DSH
+//（且这条消息不再走正常管线）——挂起问题可以被任何群友诱导消费。
+await test('R19 挂起提问：群友消息不消费、照常进管线；管理员消息才是权威回答', async () => {
+  const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 1000 } } } });
+  try {
+    h.setMode('reserved2');
+    // 造一个挂起提问（形状与 DSH ask_user_question 的桥接产物一致）
+    h.state.sessions['group:456'] = 'fixture-session-q';
+    const pendingEntry = {
+      kind: 'question',
+      clientId: 'fixture-client',
+      eventId: 'fixture-event-1',
+      questions: [{ id: 'q1', question: '选哪个？', options: [{ label: 'A' }, { label: 'B' }] }],
+      timer: null
+    };
+    h.pending.set('group:456', pendingEntry);
+    const base = {
+      self_id: 999,
+      group_id: 456,
+      sender: { nickname: '某人', card: '' }
+    };
+    // ① 群友（999）的消息：不得消费挂起，且要作为普通消息进管线（触发唤醒）
+    await h.handleIncoming('group', '456', {
+      ...base, user_id: 999, message_id: 5001,
+      message: [{ type: 'text', data: { text: 'A' } }], raw_message: 'A'
+    }, h.cfg);
+    assert.equal(h.pending.get('group:456'), pendingEntry, '群友消息不得消费挂起提问');
+    // ② 管理员（ownerQQ=123）的消息：消费挂起并提交权威回执
+    await h.handleIncoming('group', '456', {
+      ...base, user_id: 123, message_id: 5002,
+      message: [{ type: 'text', data: { text: 'B' } }], raw_message: 'B'
+    }, h.cfg);
+    assert.equal(h.pending.get('group:456'), undefined, '管理员消息消费挂起');
+  } finally { await h.close(); }
+});
+
 if (failures) {
   console.error(`\n${failures} 项失败`);
   process.exitCode = 1;
