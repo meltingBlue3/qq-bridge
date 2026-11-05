@@ -24,6 +24,11 @@ function fixture(name, patch = '') {
   fs.copyFileSync(path.join(root, 'scripts/setup-dsh.mjs'), path.join(repo, 'scripts/setup-dsh.mjs'));
   // setup-dsh.mjs 直接从仓库源生成 bundle patch，生成器必须一起进夹具。
   fs.copyFileSync(path.join(root, 'scripts/build-agent-preset-patches.mjs'), path.join(repo, 'scripts/build-agent-preset-patches.mjs'));
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  for (const file of ['preset-patches.js', 'json-file.js']) {
+    fs.copyFileSync(path.join(root, 'src', file), path.join(repo, 'src', file));
+  }
+  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.cpSync(path.join(root, 'dsh'), path.join(repo, 'dsh'), { recursive: true });
   fs.cpSync(path.join(root, 'plugins'), path.join(repo, 'plugins'), { recursive: true });
   fs.cpSync(parserRoot, path.join(repo, 'node_modules/js-yaml'), { recursive: true });
@@ -48,6 +53,22 @@ function test(name, fn) {
 }
 
 try {
+  test('all legacy and canonical presets install together and a stale closed patch is rebuilt', () => {
+    const f = fixture('routing-presets');
+    const closedPatch = path.join(f.repo, 'plugins/qq-agent-presets/presets/qsh-closed.patch.yml');
+    fs.writeFileSync(closedPatch, '# stale fixture\n');
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const pkg = JSON.parse(fs.readFileSync(path.join(f.repo, 'plugins/qq-agent-presets/package.json')));
+    for (const name of ['qq-chat', 'qq-chat-v2', 'qsh-sim', 'qsh-sim-v2', 'qsh-closed']) {
+      const relative = `./presets/${name}.patch.yml`;
+      assert.ok(pkg.dsh.bundle.patch.includes(relative));
+      const patch = yaml.load(fs.readFileSync(path.join(f.repo, 'plugins/qq-agent-presets', relative), 'utf8'));
+      assert.equal(patch[0].insert[0].config.id, name);
+    }
+    assert.ok(fs.readFileSync(closedPatch, 'utf8').includes('qq-closed-tool-restrict.mjs'));
+  });
+
   test('shared inserts, quoted IDs, flow YAML and unrelated nested arrays survive repeat setup', () => {
     const source = `# user patch\n- insert:\n    - id: mcp-snowluma\n      name: old\n    - id: custom\n      name: custom-plugin\n      config:\n        empty:\n          []\n        nested:\n          - id: mcp-snowluma-host\n            value: keep\n- insert:\n    - id: 'mcp-snowluma-host' # previous setup\n      name: old\n- {insert: [{id: mcp-web-search-safe, name: old}]}\n`;
     const f = fixture('structured', source);

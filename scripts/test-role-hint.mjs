@@ -3,6 +3,7 @@
 // qq_get_prompt 查看」，但 qq_get_prompt 的 role.hint 恒为空串——模型按
 // 指引调了工具也拿不到卡文，是一条例行却从没人踩过的死胡同。
 import test from 'node:test';
+import { bridgeHarness } from './audit-bridge-harness.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -25,7 +26,23 @@ test('「完整角色卡请调用 qq_get_prompt 查看」的死胡同文案已�
   // 卡文本身随 persona 载荷进 system（syncPersonaForSession 每次投递前同步）。
   assert.ok(!bridgeSrc.includes('角色卡已随系统提示注入'), '角色指针已迁 system（persona 载荷）');
   assert.ok(!notifySrc.includes('角色卡已随系统提示注入'), 'notify 同样');
-  assert.match(bridgeSrc, /syncPersonaForSession\(sessionId, currentMode, key\)/, '每次投递都会同步 persona 载荷');
+
+});
+
+test('每次投递前会按目标会话模式同步 persona 载荷', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    let checked = 0;
+    h.api.sessions.prompt = async ({ sessionId }) => {
+      const persona = fs.readFileSync(path.join(h.temp, 'qq-persona', `${sessionId}.md`), 'utf8');
+      assert.ok(persona.includes(h.getSocialV2State('group:456').agentToken));
+      checked++;
+      return { result: { ok: true, value: {} } };
+    };
+    await h.deliverPrompt('group:456', 'fixture');
+    assert.equal(checked, 1);
+  } finally { await h.close(); }
 });
 
 test('config.example.json 的 maxInjectChars 与代码默认（8000）对齐', () => {

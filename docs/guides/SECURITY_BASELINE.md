@@ -1,7 +1,7 @@
 # 安全基线与威胁模型（qq-bridge → QSH）
 
 > 本文把项目里**已经实现的**安全边界、**已知的**残余风险、以及**每次发布必须回归**的
-> 检查项集中到一处。与之配套的承诺性文档是 [../RULES.md](../RULES.md)（面向使用者的
+> 检查项集中到一处。与之配套的承诺性文档是 [../../RULES.md](../../RULES.md)（面向使用者的
 > 权限说明）；本文偏工程实现，供改动代码前后对照。
 >
 > 维护规则：任何改动如果改变了下面任一条目，**必须在同一个 PR 里更新本文**。
@@ -74,6 +74,8 @@
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
 | 原子写 | `atomicWriteJson/Text()` | 唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置 |
+| 状态只读降级 | `json-store.js` 与领域存储模块 | 文件缺失可创建；空文件、解析/结构/读取错误不当作空库覆盖。外部原文变化后拒绝旧内存保存，写失败可重试；属于乐观检测，不替代单实例锁。损坏角色状态按静默处理。说明见 [CONFIG_AND_STATE.md](CONFIG_AND_STATE.md) |
+| 仿真提示词同步 | `preset-patches.js` + `http/preset-routes.js` | 保存/还原按唯一生成规则更新实际 bundle；写失败返回 `synced:false` 并回滚已完成的源文件写入，回滚失败明确提示检查备份。逐文件原子替换不等于跨文件崩溃事务；恢复后原样保存可修复过期产物。同步状态按内容比较，不证明运行中的 DSH 已加载 |
 | Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
 | 令牌不回显 | 日志/活动/工具日志 | 控制台令牌只打前 6 位；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
@@ -148,7 +150,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 ## 四、发布前必须跑的检查（回归清单）
 
 ```bash
-npm run test:audit          # 全部离线回归脚本（含安全专项），必须全绿（当前 44 个）
+npm run test:audit          # 全部离线回归脚本（含安全专项）；失败与跳过项在结尾分别汇总
 npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测）
 npm run verify:persona      # 人格配置一致性
 npm run diagnose:acl        # ACL 收紧路径盘点（只读；需在**无沙箱**终端跑，见 §2.6）
@@ -159,7 +161,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 安全专项必须覆盖（缺一不可）：
 
 - [x] 白名单/黑名单/空白名单 fail-closed（含单复数与字符串/数字两种写法）
-- [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；模式切换会退役旧会话
+- [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；模式切换会退役旧会话。DSH preset 清单不可用时，模式、owner、白名单/黑名单变化仍立即撤销旧映射、轮换 token 并清理唤醒定时器；清单故障本身不会退役权限未变的会话（`test-policy-revocation.mjs`）
 - [x] 预设清单不可用时**拒绝**建群聊会话（不回退到默认预设）
 - [x] agent token 无法访问任何管理端点；空 agent token 被拒
 - [x] 控制台伪造 `Host` 被拒；错令牌（含错长度、大小写、尾空格）被拒

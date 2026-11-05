@@ -20,6 +20,20 @@ import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as presetPrompt from '../src/preset-prompt.js';
+import { getPresetPatchStatus } from '../src/preset-patches.js';
+import { createSessionStateStore } from '../src/session-state.js';
+import { segmentsToText, extractMediaFromSegments, createInboundParser, sanitizeMediaSummary } from '../src/core/inbound-parser.js';
+import { createConversationQueue } from '../src/core/conversation-queue.js';
+import { createOfflineBacklog } from '../src/core/offline-backlog.js';
+import { createOutboundDelivery, DeliveryNotSentError } from '../src/core/outbound-delivery.js';
+import { loadDshDeliveryHistory } from '../src/core/dsh-turn-log.js';
+import { createTurnDeliveryRecovery } from '../src/core/turn-delivery-recovery.js';
+import { createSessionLifecycle } from '../src/core/session-lifecycle.js';
+import { createReplySender } from '../src/core/reply-sender.js';
+import { createConversationPolicyStore } from '../src/core/conversation-policy-store.js';
+import { handleConversationRoutes } from '../src/http/conversation-routes.js';
+import { planSocialTimeline } from '../src/core/reply-formatting.js';
+import { readJsonDocument, updateJsonDocument, isJsonObject } from '../src/json-store.js';
 import * as roleCard from '../src/role-card.js';
 import * as routePolicy from '../src/route-policy.js';
 import * as inboundMessage from '../src/inbound-message.js';
@@ -189,6 +203,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   source = source.slice(0, source.indexOf("process.on('SIGINT'"));
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
   return {
+    pumpMux, conversationPolicies, applyConversationRouting, runtimeMode, sessionPolicy, isSessionAllowedInCurrentMode,
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, promptQueues,
     auditAndSend, KNOWN_AGENT_TOKENS, pending, sendChains,
@@ -211,10 +226,12 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       selfUserId = String(id ?? '');
       selfNickname = selfDisplayName.toLowerCase() || 'deepseek';
     },
-    flushQueue, retireSession,
+    flushQueue, retireSession, reconcileSessionPolicies, queued,
     voiceCfg, voiceLibrary, resolveVoicePathForV2, resolveVoicePathForOperator,
     voiceBudgetCheck, sendVoiceV2, sendVoiceForV2, assertOutboundAuditOk,
-    setMode(value) { currentMode = value; },
+    setMode(value) { currentMode = value; legacyModeKnown = true; },
+    setQqOnline(value) { snowlumaHealth.connected = value; snowlumaHealth.accountOnline = value; },
+    outbound, recoveryQueue,
     setReady(value) { dshReady = value; },
     setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
     resetEpoch() { sessionEpoch++; },
@@ -240,6 +257,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...routePolicy, ...inboundMessage, ...jsonFile, ...configModule, ...httpUtils, ...initialPromptsModule, ...rolesModule, ...roleRoutesModule, ...presetRoutesModule, ...securityRoutesModule, ...dshRoutesModule, ...accessRoutesModule, ...socialRoutesModule, ...notifyRoutesModule, ...tokenRoutesModule, ...lifecycleRoutesModule, ...socialV2AdminRoutesModule, ...socialV2SessionRoutesModule, ...socialV2SendRoutesModule, ...socialV2StickerRoutesModule, ...voiceRoutesModule, ...waitRouteModule, ...memoryRoutesModule, ...socialV2MiscRoutesModule, ...socialV2ReadRoutesModule, ...slangRoutesModule, ...sendRoutesModule, ...wakePolicyModule, ...stateStoreModule, ...wakeSchedulerModule, ...turnLeaseModule, ...messageIdDedupeModule, ...recallModule, ...tokenFragmentModule, ...forwardMediaRegistryModule, ...receiptsModule, ...personaSuffixModule,
     // bridge.js 里用了 import as 的别名，VM 里没有 import，必须把别名也补上。
+    segmentsToText, extractMediaFromSegments, createInboundParser, sanitizeMediaSummary, createConversationQueue, createOfflineBacklog, createSessionLifecycle, createReplySender, planSocialTimeline, createConversationPolicyStore, handleConversationRoutes,
+    createOutboundDelivery, DeliveryNotSentError, loadDshDeliveryHistory, createTurnDeliveryRecovery,
+    getPresetPatchStatus, createSessionStateStore, readJsonDocument, updateJsonDocument, isJsonObject,
     createDefaultWakeConfigV2: wakePolicyModule.defaultWakeConfigV2,
     refreshStoredWakeConfigV2: wakePolicyModule.refreshDefaultWakeConfigV2,
     checkPreSleepWaitBlocked: wakePolicyModule.preSleepWaitBlockedV2,

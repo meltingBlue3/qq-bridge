@@ -136,7 +136,7 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
     for (const [flag, name] of Object.entries(toolMap)) {
       if (tools[flag] !== false && !(stickerToolFlags.has(flag) && !stickerEnabled())) enabledTools.push(name);
     }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     const self = getSelfIdentity();
     sendJson({
       ok: true,

@@ -29,7 +29,7 @@ npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
 node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 ```
 
-脚本使用 Playwright 和 Chromium。优先使用项目内安装的 `playwright`；Windows 上若未安装 Playwright，会自动改用本机 Chrome / Edge，无需下载浏览器。其他环境可安装 Playwright 及其浏览器，或通过以下环境变量指定：
+脚本使用 Playwright 库和 Chromium 浏览器。需要安装 `playwright` 库或通过 `PLAYWRIGHT_MODULE` 指向已有目录；Windows 上可以使用本机 Chrome / Edge，无需另下载浏览器。通过以下环境变量指定：
 
 - `PLAYWRIGHT_MODULE`：Playwright 模块目录（例如 `npm install --no-save playwright` 后指向 `node_modules/playwright`）。
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium / Chrome 可执行文件。
@@ -45,13 +45,13 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 - 一代社交参数与会话阶段。
 - 黑话添加、搜索、标签切换、确认对话框与学习参数。
 - 测试消息、AI 提醒仅发送到 mock API。
-- 全部 24 次写请求与改造前的 API payload 基线逐项完全比较。
+- 历史 24 次写请求与改造前的 API payload 基线逐项比较；现有的 ACL 重新检测请求和 `sendVoice` 字段作为显式增量加入预期，未知字段或额外请求仍会失败，历史 JSON 不重录。
 - 手机 390px 与平板 768px 下九个视图没有页面级横向溢出。
 - 深色模式：切换生效、写入 `localStorage`、刷新后保持、`aria-pressed` 与 `color-scheme` 同步、正文对比度 ≥ 7:1、深色下 390 / 768px 无横向溢出。
 - 未做选择时跟随系统 `prefers-color-scheme`。
 - `prefers-reduced-motion: reduce` 下关闭背景动效、页面切换动画与过渡。
 - 人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。
-- 仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。
+- 仿真提示词：默认只读、解锁后可编辑；保存及正文未变时的同步修复均提示重启 DSH；同步失败保留编辑内容。
 - 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 

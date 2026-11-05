@@ -11,6 +11,10 @@
 
 | 文档 | 一句话说明 | 状态 |
 | --- | --- | --- |
+| [guides/CONVERSATION_ROUTING.md](guides/CONVERSATION_ROUTING.md) | 逐会话模式、preset、迁移/回退、鉴权与审计、控制台使用和运行行为 | ✅ 已接入，真实 DSH 工具注册仍需集成验收 |
+| [guides/CONFIG_AND_STATE.md](guides/CONFIG_AND_STATE.md) | 唯一配置默认值、示例生成、状态只读降级、写失败重试与外部更新冲突保护 | ✅ 2026-11-05 配置与存储整合 |
+| [guides/WORK_PLAN.md](guides/WORK_PLAN.md) | 分批改进顺序、已复现的撤权问题与修复、验证入口和环境覆盖缺口 | ✅ 2026-11-05 执行记录 |
+| [guides/PROMPT_LAYERING.md](guides/PROMPT_LAYERING.md) | 仿真与人格的职责、system prompt 变量注入协议及优先级 | ✅ 当前人格注入方式 |
 | [guides/PROJECT_GUIDE.md](guides/PROJECT_GUIDE.md) | **权威项目说明书**（113 KB / 1450+ 行）：架构、内外核划分、数据流、配置全解、安全机制、调试与改进指南，含 2026-08-20 ~ 2026-09-11 的逐轮更新记录 | ✅ **唯一权威版本**（另一份同名精简版已归档到 legacy，见下） |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | DSH 端安装说明：`qq-chat` / `qq-chat-v2` preset 与三个 MCP server 怎么挂到目标设备的 DSH 上 | ✅ |
 | [guides/VOICE.md](guides/VOICE.md) | 语音发送全解：独立工具（`voice-tool/` 的图形界面与命令行）、桥接 CLI、AI 工具、控制台面板，以及**工具拆出后的配置解析顺序** | ✅ 2026 整理时已更新（工具移到上一级 `voice-tool/`） |

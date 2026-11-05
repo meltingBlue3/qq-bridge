@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { handleSocialV2AdminRoutes } from '../src/http/socialv2-admin-routes.js';
 import { createInitialPromptStore } from '../src/initial-prompts.js';
+import { createJsonStore, isJsonObject } from '../src/json-store.js';
 
 const canonicalV2Key = (key) => {
   const m = /^(group|private):(\d+)$/.exec(String(key ?? '').trim());
@@ -27,6 +28,8 @@ function harness({ root, promptsFile, socialV2File }, cfgOverride = {}) {
     ...cfgOverride
   }));
   const socialV2 = { paused: false, conversations: new Map() };
+  const stateStore = createJsonStore({ file: socialV2File, fallback: () => ({ conversations: {} }), validate: isJsonObject });
+  stateStore.load();
   const map = () => new Map();
   const initialPromptStore = createInitialPromptStore({
     file: promptsFile, maxChars: () => 2000, canonicalKey: canonicalV2Key, log: () => {}
@@ -49,7 +52,7 @@ function harness({ root, promptsFile, socialV2File }, cfgOverride = {}) {
     setupSleepTimerV2: (key) => deps.setupSleepTimerCalls.push(key),
     scheduleProactiveCheckCalls: [],
     scheduleProactiveCheckV2: (key) => deps.scheduleProactiveCheckCalls.push(key),
-    saveSocialV2State: () => {},
+    saveSocialV2State: () => stateStore.save({ paused: socialV2.paused, conversations: Object.fromEntries(socialV2.conversations) }),
     bumpSessionEpochCalls: 0,
     bumpSessionEpoch: () => { deps.bumpSessionEpochCalls += 1; },
     sessionPromises: map(),

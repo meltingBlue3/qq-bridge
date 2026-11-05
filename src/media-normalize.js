@@ -1,3 +1,4 @@
+import { createDefaultConfig } from './config-defaults.js';
 // 媒体归一化：把「QQ 给我们的原始图片」压成「DSH 与模型真能吃下的形状」。
 //
 // ── 为什么需要这一层（2026-10-18 审计结论，见 docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md）
@@ -38,18 +39,19 @@ import { resolveFfmpeg } from './voice-core.js';
 import { gifMosaic } from './media/gif-mosaic.js';
 
 /** 默认值集中一处，bridge.js 只做 config 覆盖（见 modelMediaLimits）。 */
+const mediaDefaults = createDefaultConfig().socialV2.media;
 export const MEDIA_DEFAULTS = Object.freeze({
   // 交给 DSH 的单张图片原始字节上限。DSH 的炸栈线是 ≈3.20 MiB，
   // 这里取 1 MiB：留 3 倍余量，顺带把 token 成本压一个数量级（1 MiB 图 ≈ 1.33 MB base64）。
-  maxModelBytes: 1024 * 1024,
+  maxModelBytes: mediaDefaults.maxModelBytes,
   // 长边上限：手机直出 4000×3000 缩到 1280 后约 150–250 KB，肉眼描述完全够用。
-  maxLongEdge: 1280,
+  maxLongEdge: mediaDefaults.maxLongEdge,
   // 动图抽几帧：6 帧正好 3×2，超过 9 帧拼图会小到看不清单帧。
-  gifFrames: 6,
+  gifFrames: mediaDefaults.gifFrames,
   // 每一格的目标宽度（px）：240 一格，3×2 拼图约 736×492，实测 92 KB。
-  gifTile: 240,
+  gifTile: mediaDefaults.gifTile,
   // 单张 ffmpeg 调用的硬超时。实测 200 帧 GIF 拼图 269 ms、4K 重编码 < 1 s，25 s 是兜底。
-  timeoutMs: 25000
+  timeoutMs: mediaDefaults.normalizeTimeoutMs
 });
 
 /** 硬上限：不管 config 怎么写，都不允许超过 DSH 的实测炸栈线下沿。 */

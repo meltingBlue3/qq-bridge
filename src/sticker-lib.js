@@ -1,3 +1,5 @@
+import { createJsonStore, readJsonDocument } from './json-store.js';
+import { atomicWriteJson } from './json-file.js';
 // 表情包体系（二代仿真模式）——本地表情知识库与策略提示纯函数。
 //
 // 职责：
@@ -11,9 +13,6 @@
 //   不覆盖 QQ 的备注；QQ desc 为空时 AI 可以看图后用 qq_sticker_note 记录自己的理解。
 // - 所有文本只做展示/提示，不执行任何本地操作。
 
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { truncateText } from './md-to-plain.js';
 
 export function nowIso() {
@@ -103,36 +102,19 @@ export function normalizeStickerEntry(raw) {
  * @throws 读取或解析失败时抛出，交由调用方降级为「只读不写」。
  */
 export function loadStickerStore(file) {
-  let text;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return []; // 还没有库文件 = 首次使用
-    throw new Error(`表情库读取失败（${error?.message ?? error}）`);
-  }
-  try {
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) throw new Error('顶层不是数组');
-    return parsed.map(normalizeStickerEntry).filter(Boolean);
-  } catch (error) {
-    throw new Error(`表情库内容损坏（${error?.message ?? error}），已拒绝按空库继续以免覆盖已有收藏`);
-  }
+  return readJsonDocument(file, { fallback: () => [], validate: Array.isArray })
+    .map(normalizeStickerEntry).filter(Boolean);
 }
 
-export function saveStickerStore(file, entries) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  // 失败时必须自己清掉临时文件（对齐 saveSlang 的写法）：写盘中途报错（磁盘满、杀软占用）
-  // 会在 state/ 里永久留下 stickers.json.<pid>.<hex>.tmp —— 名字带随机串，没人会再去清理它，
-  // 而且下次排查"表情库为什么不对"时这些残留文件会让人以为写入成功了。
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, file);
-  } catch (error) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
+export function saveStickerStore(file, entries) { atomicWriteJson(file, entries); }
+
+export function createStickerStore(file, options = {}) {
+  const persistence = createJsonStore({ file, fallback: () => [], validate: Array.isArray, ...options });
+  return {
+    load() { return persistence.load().map(normalizeStickerEntry).filter(Boolean); },
+    save: persistence.save,
+    get writable() { return persistence.writable; },
+  };
 }
 
 // 把 SnowLuma 返回的 QQ 收藏表情详情合并进本地库。

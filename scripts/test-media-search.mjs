@@ -1,3 +1,4 @@
+import { extractMediaFromSegments, segmentsToText } from '../src/core/inbound-parser.js';
 // 图片/表情链路 + 联网搜索的离线回归。
 //
 // 背景（真实故障，见 2026-10-17 的会话日志）：
@@ -54,9 +55,7 @@ const WEBP_VP8X = (() => {
 
 // ── 消息段 → 媒体元数据 ─────────────────────────────────────────────────────
 await test('extractMediaFromSegments 保留表情包字段（image / mface / face）', async () => {
-  const h = await bridgeHarness();
-  try {
-    const media = h.extractMediaFromSegments([
+    const media = extractMediaFromSegments([
       {
         type: 'image',
         data: {
@@ -90,8 +89,7 @@ await test('extractMediaFromSegments 保留表情包字段（image / mface / fac
     assert.equal(media[2].faceId, '178');
     assert.equal(media[2].url, 'https://example.invalid/f.png');
 
-    assert.equal(await h.segmentsToText([{ type: 'mface', data: { summary: '给你糖吃' } }]), '[表情:给你糖吃]');
-  } finally { await h.close(); }
+    assert.equal(await segmentsToText([{ type: 'mface', data: { summary: '给你糖吃' } }]), '[表情:给你糖吃]');
 });
 
 // ── 表情包下载：CDN 优先、emoji_id 兜底、普通图片仍走 get_image ──────────────

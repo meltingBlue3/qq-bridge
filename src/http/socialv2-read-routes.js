@@ -3,7 +3,7 @@
 //
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
 // bot.raw / bot.request / onebotHttpAction / fetchMediaData / resolveReplyInfo 等
-// I/O 均以函数注入，模式判断用 getCurrentMode() 回调。
+// I/O 均以函数注入，模式判断用 getCurrentMode(key) 回调。
 
 /**
  * @returns {Promise<boolean>} true = 已处理
@@ -108,7 +108,7 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     const keyMatch = /^(group|private):(\d+)$/.exec(key);
     if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return true; }
     if (!id) { sendJson({ ok: false, error: 'id 不能为空' }, 400); return true; }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (currentMode !== 'reserved2') {
       sendJson({ ok: false, error: '合并转发查看仅 reserved2 模式可用' }, 403);
       return true;
@@ -211,7 +211,7 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return true; }
     if (req.headers['x-agent-token'] && !v2ToolEnabled('getForwardMsg')) { sendJson({ ok: false, error: '工具未启用：qq_get_forward_msg' }, 403); return true; }
-    if (getCurrentMode() !== 'reserved2') { sendJson({ ok: false, error: '转发媒体读取仅 reserved2 模式可用' }, 403); return true; }
+    if (getCurrentMode(key) !== 'reserved2') { sendJson({ ok: false, error: '转发媒体读取仅 reserved2 模式可用' }, 403); return true; }
     if (!media.length) { sendJson({ ok: true, key, media: [], images: [] }); return true; }
     // 安全边界：只抓「本会话真的见过」的媒体（转发读取时登记 / 本会话消息已入库）。
     // 旧实现照单全收 body.media，等于给 AI 一个「帮我抓任意 URL」的原语。
@@ -280,7 +280,7 @@ export async function handleSocialV2ReadRoutes({ req, url, sendJson, readBody, d
     // 也不能直接用 v2SessionAllowed：它的 closed-agent 分支只放行 `private:<ownerQQ>`，
     // 于是「管理员在私聊里让 AI 看看某群成员」会 403 —— 那是旧工具本来支持的能力，
     // 属于这次改动不该带走的回归。所以 closed-agent 下按**同样严格的白名单**放行群读取。
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     const groupMembersAllowed = currentMode === 'closed-agent'
       ? allowed('group', Number(groupMatch[1]), cfg)
       : v2SessionAllowed(key);

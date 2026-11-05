@@ -47,7 +47,7 @@ export function createWakeScheduler({
 
   async function sendWakePrompt(key, reason) {
     if (cfg.socialV2?.enabled === false) return;
-    if (getCurrentMode() !== 'reserved2' || socialV2.paused) return;
+    if (getCurrentMode(key) !== 'reserved2' || socialV2.paused) return;
     if (!isSessionAllowed(key)) {
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
@@ -172,7 +172,7 @@ export function createWakeScheduler({
 
   function scheduleReplyCheck(key) {
     if (cfg.socialV2?.enabled === false) return;
-    if (socialV2.paused || getCurrentMode() !== 'reserved2') return;
+    if (socialV2.paused || getCurrentMode(key) !== 'reserved2') return;
     const st = getSocialV2State(key);
     // 已有真实唤醒/有限睡眠/回复检查在排队时不再重复安排，避免 AI 被连环唤醒。
     if (st.pendingWakeTimer || st.sleepTimer || st.replyCheckTimer) return;
@@ -229,6 +229,7 @@ export function createWakeScheduler({
   }
 
   function scheduleWake(key, reason) {
+    if (getCurrentMode(key) !== 'reserved2') return;
     if (cfg.socialV2?.enabled === false) return;
     if (socialV2.paused) return;
     if (!isSessionAllowed(key)) {
@@ -326,6 +327,7 @@ export function createWakeScheduler({
   }
 
   function setupSleepTimer(key) {
+    if (getCurrentMode(key) !== 'reserved2') return;
     if (cfg.socialV2?.enabled === false) return;
     if (!isSessionAllowed(key)) return;
     const st = getSocialV2State(key);
@@ -374,7 +376,7 @@ export function createWakeScheduler({
 
   function scheduleProactiveCheck(key) {
     if (cfg.socialV2?.proactive?.enabled === false) return;
-    if (socialV2.paused || getCurrentMode() !== 'reserved2') return;
+    if (socialV2.paused || getCurrentMode(key) !== 'reserved2') return;
     if (!isSessionAllowed(key)) return;
     const st = getSocialV2State(key);
     if (st.proactiveTimer) return;

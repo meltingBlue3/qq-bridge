@@ -30,7 +30,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PRESETS_DIR = path.join(ROOT, 'dsh', 'agent-presets');
 
 /** 仿真模式使用的 preset（不允许有任何本地执行能力）。 */
-const SIMULATION_PRESETS = ['qq-chat', 'qq-chat-v2'];
+const SIMULATION_PRESETS = ['qq-chat', 'qq-chat-v2', 'qsh-sim', 'qsh-sim-v2'];
 
 /** 封闭 agent 的 preset：按设计**允许**完整本地工具面。 */
 const CLOSED_AGENT_PRESETS = ['qsh-closed'];
@@ -88,8 +88,12 @@ const LOCAL_EXECUTION_TOOLS = [
   'subagent_codex', 'subagent_claude_code',
 ];
 
-/** 0.2.1 起 Codex / Claude Code 改为按需安装：这组名字默认扫不到，不算拼错假名。 */
-const OPTIONAL_BUNDLE_TOOLS = new Set(['subagent_codex', 'subagent_claude_code']);
+/** 按安装组合注册的工具仍须拒绝，但可以缺席于当前安装包。 */
+const OPTIONAL_BUNDLE_TOOLS = new Set([
+  'subagent_codex', 'subagent_claude_code',
+  // Web profile 的 plugin-guard 三件套在已验证的 Windows DSH NEXT 安装包中缺席。
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
+]);
 
 /**
  * 工具名 → 真实存在与否。抽取实现在 `scripts/dsh-tool-names.mjs`（唯一实现，
@@ -212,14 +216,14 @@ test('守卫导出的名单与本测试的清单一致（防两份名单各自�
   }
 });
 
-test('守卫名单里的每个名字都是 DSH 真实注册的工具（防拼错假名静默失效）', async () => {
+test('守卫名单里的每个名字都是 DSH 真实注册的工具（防拼错假名静默失效）', async (t) => {
   // 为什么必须测：`tools.restrict()` 对未知名字会**抛错**，而守卫逐个 try/catch
   // 只打日志 ⇒ 拼错的名字 = **静默 no-op**。这正是本名单初版的真实缺陷：
   // pwsh_persistent / bash_persistent / cordis / goal_write / goal_read 五个假名
   // 让整批限制悄悄少生效，而套件当时全绿。
   const dshNames = collectDshToolNames();
   if (dshNames === null) {
-    console.log('  ⏭  跳过：未找到 DSH 工具包（设 DSH_TOOL_PACKAGES 指向 @deepseek-ai 目录即可启用）');
+    t.skip('未找到 DSH 工具包；设 DSH_TOOL_PACKAGES 指向 @deepseek-ai 目录即可启用');
     return;
   }
   for (const id of SIMULATION_PRESETS) {
@@ -260,7 +264,7 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
   }
 });
 
-test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', () => {
+test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', (t) => {
   // qsh-closed 由 ADR 0003 定义为**故意**拥有完整本地工具面：它的守卫只负责
   // "哪些 QQ 动作可见"，不负责"本地工具权限边界"。
   //
@@ -270,7 +274,7 @@ test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', ()
   const present = CLOSED_AGENT_PRESETS.filter((id) => fs.existsSync(path.join(PRESETS_DIR, id)));
   if (present.length === 0) {
     // 不是失败，但必须让人看见"这条闸门还没被真正覆盖"。
-    console.log('  ⏭  qsh-closed 尚未创建（ADR 0003 待落地）；此项覆盖暂为空，不是通过。');
+    t.skip('qsh-closed 尚未创建（ADR 0003 待落地）；此项覆盖暂为空');
     return;
   }
   for (const id of present) {
@@ -286,4 +290,30 @@ test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', ()
       );
     }
   }
+});
+
+test('closed preset keeps actual local tools available but rejects simulation-only QQ actions', async () => {
+  const guard = await import('../plugins/qq-agent-presets/qq-closed-tool-restrict.mjs');
+  const restricted = [], hooks = [];
+  guard.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => hooks.push(fn) } });
+  assert.equal(hooks.length, 1);
+  for (const name of ['pwsh', 'read', 'write', 'edit', 'glob', 'grep', 'subagent']) {
+    assert.equal(hooks[0]({ name }), undefined);
+    assert.equal(restricted.includes(name), false);
+  }
+  for (const name of guard.CLOSED_QQ_TOOLS) assert.equal(hooks[0]({ name: `mcp__snowluma__${name}` }), undefined);
+  for (const name of guard.SIMULATION_ONLY_QQ_TOOLS) {
+    assert.ok(restricted.includes(`mcp__snowluma__${name}`));
+    assert.equal(typeof hooks[0]({ name: `mcp__snowluma__${name}` }), 'string');
+  }
+  assert.equal(typeof hooks[0]({ name: 'mcp__snowluma__qq_new_unknown_action' }), 'string');
+});
+
+test('closed preset explicitly declares shell and file tools in the installed patch', () => {
+  const patch = fs.readFileSync(path.join(ROOT, 'plugins/qq-agent-presets/presets/qsh-closed.patch.yml'), 'utf8');
+  for (const packageName of ['dsh-tool-pwsh', 'dsh-tool-fs', 'dsh-tool-fs-search']) {
+    assert.ok(patch.includes(`@deepseek-ai/${packageName}`));
+  }
+  assert.ok(patch.includes('qq-agent-presets/qq-closed-tool-restrict.mjs'));
+  assert.ok(!patch.includes('name: qq-agent-presets/qq-tool-restrict.mjs'));
 });

@@ -41,7 +41,7 @@ export async function handleNotifyRoutes({ req, url, sendJson, readBody, deps })
       sendJson({ ok: false, error: 'id 无效' }, 400);
       return true;
     }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (!modeAllowed(key, kind, id, cfg, currentMode)) {
       sendJson({ ok: false, error: `该会话不在当前模式（${currentMode}）允许范围内` }, 403);
       return true;

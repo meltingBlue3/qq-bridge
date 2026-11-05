@@ -46,7 +46,7 @@ export async function handleSendRoutes({ req, url, sendJson, readBody, deps }) {
     }
     const kind = keyMatch[1];
     const id = Number(keyMatch[2]);
-    if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, getCurrentMode())) {
+    if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, getCurrentMode(key))) {
       sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
       return true;
     }
@@ -61,7 +61,7 @@ export async function handleSendRoutes({ req, url, sendJson, readBody, deps }) {
     const keyMatch = /^(group|private):(\d+)$/.exec(key);
     if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return true; }
     if (!messageId) { sendJson({ ok: false, error: 'messageId 不能为空' }, 400); return true; }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (currentMode === 'reserved2' && !agentToken) {
       sendJson({ ok: false, error: 'reserved2 模式读取图片必须携带 agent token' }, 403);
       return true;
@@ -119,7 +119,7 @@ export async function handleSendRoutes({ req, url, sendJson, readBody, deps }) {
     const key = isPrivate ? `private:${targetId}` : `group:${targetId}`;
     // 安全边界：发送工具只允许在 closed-agent（管理员私聊）或 reserved2（二代 AI 带会话令牌）下使用；
     // chat/reserved 的自动转发已覆盖正常回复，MCP 发送工具不应成为 prompt injection 的越权出口。
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (currentMode === 'chat' || currentMode === 'reserved') {
       sendJson({ ok: false, error: '发送工具仅限 closed-agent / reserved2 模式使用' }, 403);
       return true;

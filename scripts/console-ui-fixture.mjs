@@ -15,9 +15,11 @@ const timestamp = '2026-09-20T08:30:00.000Z';
 function presetStatusFixture(preset) {
   return {
     preset,
-    label: preset === 'qq-chat' ? '一代仿真（reserved）' : '二代仿真（reserved2）',
+    label: preset.startsWith('qsh-') ? `逐会话仿真（${preset}）` : preset === 'qq-chat' ? '一代仿真（reserved）' : '二代仿真（reserved2）',
     sourceFile: `dsh/agent-presets/${preset}/agent.cordis.yml`,
     installed: true,
+    bundled: true,
+    synced: true,
     requiresRestart: true,
   };
 }
@@ -344,6 +346,8 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
   const file = htmlPath || resolve(projectRoot, original ? 'scripts/fixtures/console.before.html' : 'public/console.html');
   await readFile(file); // Fail early rather than displaying a broken preview.
   const state = makeFixtureState();
+  for (const name of ['qsh-sim', 'qsh-sim-v2']) state.simPrompts[name] = state.simPrompts['qq-chat-v2'];
+  let routingDocument = null;
   const requests = [];
   const unknownRequests = [];
   const server = http.createServer(async (req, res) => {
@@ -376,7 +380,8 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       }
       if (method === 'GET') {
         switch (path) {
-          case '/api/status': return json({ ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
+          case '/api/status': return json({ routing: { enabled: routingDocument?.enabled === true }, ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
+          case '/api/conversations': return json({ ok: true, enabled: routingDocument?.enabled === true, writable: true, document: routingDocument });
           case '/api/presets': return json({ presets: [{ id: 'qq-chat-v2', trust: 'user' }, { id: 'qq-chat', trust: 'user' }] });
           case '/api/roles': return json({
             roles: state.roles.slice(),
@@ -420,7 +425,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             });
           }
           case '/api/preset/sim-prompt': {
-            const preset = url.searchParams.get('preset') === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
+            const preset = Object.hasOwn(state.simPrompts, url.searchParams.get('preset')) ? url.searchParams.get('preset') : 'qq-chat-v2';
             return json({
               ok: true,
               content: state.simPrompts[preset],
@@ -432,7 +437,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             });
           }
           case '/api/preset/sim-prompt/backups': {
-            const preset = url.searchParams.get('preset') === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
+            const preset = Object.hasOwn(state.simPrompts, url.searchParams.get('preset')) ? url.searchParams.get('preset') : 'qq-chat-v2';
             return json({ ok: true, backups: [{ file: `${preset}.agent.cordis.yml.fixture`, mtime: Date.parse(timestamp) }] });
           }
           case '/api/dsh/model': return json({
@@ -507,8 +512,22 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           case '/api/tokens/recent': return json({ ok: true, symbol: '¥', entries: usageRecentFixture() });
         }
       }
+      if (method === 'DELETE' && path === '/api/conversations/policy') {
+        delete routingDocument.policy.conversations[url.searchParams.get('key')];
+        return json({ ok: true });
+      }
       if (method === 'POST') {
         switch (path) {
+          case '/api/conversations/migrate':
+            routingDocument = { enabled: true, ownerQQ: state.whitelist.ownerQQ, revision: 1,
+              policy: { defaults: { mode: 'simulation', preset: 'qsh-sim', model: null, reasoningEffort: null }, conversations: {} },
+              audit: [{ seq: 1, at: Date.now(), type: 'routing-migrated', updatedBy: 'console' }] };
+            return json({ ok: true });
+          case '/api/conversations/policy':
+            routingDocument.policy.conversations[body.key] = body.policy;
+            routingDocument.audit.push({ at: Date.now(), type: 'conversation-set', key: body.key, updatedBy: 'console' });
+            return json({ ok: true });
+          case '/api/conversations/rollback': routingDocument.enabled = false; return json({ ok: true });
           case '/api/mode': state.mode = body.mode; state.closedAgentPreset = body.closedAgentPreset; return json({ ok: true, dshSynced: true });
           case '/api/role': state.role = body.role; return json({ ok: true });
           case '/api/roles/create': state.roles.push(body.name); state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, warnings: [] });
@@ -531,14 +550,14 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           }
           case '/api/roles/limit': state.roleInjectMax = Number(body.maxInjectChars) || state.roleInjectMax; return json({ ok: true, maxInjectChars: state.roleInjectMax, limits: { injectMaxChars: state.roleInjectMax } });
           case '/api/preset/sim-prompt': {
-            const preset = body.preset === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
+            const preset = Object.hasOwn(state.simPrompts, body.preset) ? body.preset : 'qq-chat-v2';
             const content = String(body.content ?? '');
             const unchanged = content === state.simPrompts[preset];
             if (!unchanged) state.simPrompts[preset] = content;
             return json({ ok: true, unchanged, chars: content.length, warnings: [], synced: true, requiresRestart: !unchanged, status: presetStatusFixture(preset) });
           }
           case '/api/preset/sim-prompt/restore': {
-            const preset = body.preset === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
+            const preset = Object.hasOwn(state.simPrompts, body.preset) ? body.preset : 'qq-chat-v2';
             return json({ ok: true, restoredFrom: `${preset}.agent.cordis.yml.fixture`, requiresRestart: true });
           }
           case '/api/dsh/effort': state.dshEffort = body.reasoningEffort; return json({ ok: true, reasoningEffort: body.reasoningEffort });

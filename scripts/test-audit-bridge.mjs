@@ -55,7 +55,7 @@ await test('old prompt completion cannot delete replacement queue after reset', 
   };
   const first = h.deliverPrompt('group:456', 'first');
   while (release.length < 1) await new Promise((resolve) => setImmediate(resolve));
-  h.drainPromptQueue('group:456', 'reset');
+  h.retireSession('group:456', { discardQueued: true });
   const second = h.deliverPrompt('group:456', 'second');
   while (release.length < 2) await new Promise((resolve) => setImmediate(resolve));
   const replacement = h.promptQueues.get('group:456');

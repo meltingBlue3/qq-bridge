@@ -4,7 +4,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteText } from '../json-file.js';
+import { writePresetAndPatch } from '../preset-patches.js';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from '../preset-prompt.js';
 
 /**
@@ -18,7 +18,7 @@ export async function handlePresetRoutes({ req, url, sendJson, readBody, deps })
     readPresetPromptText,
     presetStatus,
     presetSourceYaml,
-    installedPresetYaml,
+    presetPatchYaml,
     backupPresetFile,
     listPresetBackups,
     log
@@ -51,47 +51,38 @@ export async function handlePresetRoutes({ req, url, sendJson, readBody, deps })
     const preset = knownPresetName(body.preset);
     if (!preset) { sendJson({ ok: false, error: `未知预设（只支持 ${presetLabel()}）` }, 400); return true; }
     let nextText;
+    let unchanged;
     try {
       const { text, prefix } = readPresetPromptText(preset);
       // 内容没变就不要写：写回会把折叠块规整成字面量块（值不变但排版变化），
       // 让一次"打开又保存"把整个提示词块变成全删全加的 diff，失去可复审性。
       const normalized = String(body.content ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '');
-      if (normalized === prefix) {
-        sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: fs.existsSync(installedPresetYaml(preset)), requiresRestart: false, status: presetStatus(preset) });
-        return true;
-      }
-      nextText = renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
+      unchanged = normalized === prefix;
+      nextText = unchanged ? text : renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
     } catch (error) {
       sendJson({ ok: false, error: error?.message ?? '校验失败' }, 400);
       return true;
     }
     const warnings = presetPromptWarnings(body.content);
-    let sourceBackup = null;
+    let result;
     try {
-      sourceBackup = backupPresetFile(preset);
-      atomicWriteText(presetSourceYaml(preset), nextText);
-      // 同步到 DSH 实际读取的安装目录。
-      // 注意：安装副本**不做仓库内备份**——它的内容与刚写好的源文件一致，
-      // 备份它等于把含本机绝对路径的快照塞进仓库工作区，没有额外价值。
-      const installed = installedPresetYaml(preset);
-      if (fs.existsSync(installed)) {
-        fs.copyFileSync(presetSourceYaml(preset), installed);
-      }
+      if (!unchanged) backupPresetFile(preset);
+      result = writePresetAndPatch(preset, {
+        sourceFile: presetSourceYaml(preset), patchFile: presetPatchYaml(preset), text: nextText,
+      });
     } catch (error) {
-      // 尽力回滚源文件，避免留下半截状态
-      if (sourceBackup && fs.existsSync(sourceBackup)) {
-        try { fs.copyFileSync(sourceBackup, presetSourceYaml(preset)); } catch {}
-      }
-      sendJson({ ok: false, error: `写入失败：${error?.message ?? error}` }, 500);
+      sendJson({ ok: false, synced: false, error: `写入失败：${error?.message ?? error}` }, 500);
       return true;
     }
-    log(`控制台：${preset} 仿真提示词已更新（${String(body.content ?? '').length} 字符）${warnings.length ? `，${warnings.length} 条警告` : ''}；需重启 DSH 生效`);
+    if (result.requiresRestart) log(`控制台：${preset} 仿真提示词已同步到 bundle（${String(body.content ?? '').length} 字符）${warnings.length ? `，${warnings.length} 条警告` : ''}；需重启 DSH 生效`);
     sendJson({
       ok: true,
+      unchanged,
       chars: String(body.content ?? '').length,
       warnings,
-      synced: fs.existsSync(installedPresetYaml(preset)),
-      requiresRestart: true,
+      synced: result.synced,
+      bundleUpdated: result.patchChanged,
+      requiresRestart: result.requiresRestart,
       status: presetStatus(preset),
     });
     return true;
@@ -131,13 +122,13 @@ export async function handlePresetRoutes({ req, url, sendJson, readBody, deps })
         return true;
       }
       backupPresetFile(preset);
-      atomicWriteText(presetSourceYaml(preset), restored);
-      const installed = installedPresetYaml(preset);
-      if (fs.existsSync(installed)) fs.copyFileSync(presetSourceYaml(preset), installed);
+      const result = writePresetAndPatch(preset, {
+        sourceFile: presetSourceYaml(preset), patchFile: presetPatchYaml(preset), text: restored,
+      });
       log(`控制台：${preset} 仿真提示词已还原自备份 ${target}；需重启 DSH 生效`);
-      sendJson({ ok: true, restoredFrom: target, requiresRestart: true });
+      sendJson({ ok: true, restoredFrom: target, synced: result.synced, bundleUpdated: result.patchChanged, requiresRestart: result.requiresRestart });
     } catch (error) {
-      sendJson({ ok: false, error: error?.message ?? '还原失败' }, 500);
+      sendJson({ ok: false, synced: false, error: error?.message ?? '还原失败' }, 500);
     }
     return true;
   }

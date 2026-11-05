@@ -2,9 +2,15 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { classifyAuditResult } from './audit-results.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const tests = [
+  'test-conversation-queue.mjs', 'test-inbound-parser.mjs', 'test-offline-backlog.mjs', 'test-session-lifecycle.mjs', 'test-reply-sender.mjs', 'test-reply-formatting.mjs',
+  'test-conversation-policy-store.mjs', 'test-conversation-routes.mjs', 'test-conversation-routing.mjs',
+  'test-outbound-delivery.mjs', 'test-dsh-turn-log.mjs', 'test-turn-delivery-recovery.mjs',
+  'test-json-store.mjs', 'test-config-persistence.mjs', 'test-config-example.mjs',
+  'test-audit-results.mjs', '../src/core/session-router.test.mjs', 'test-policy-revocation.mjs', 'test-agent-preset-patches.mjs',
   'test-audit-bridge.mjs', 'test-audit-protocol.mjs', 'test-audit-protocol-helpers.mjs',
   'test-audit-security.mjs', 'test-audit-security-mcp.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',
@@ -96,16 +102,26 @@ const tests = [
   'test-snowluma-upstream-health.mjs',
 ];
 let failed = 0;
+const incomplete = [];
 for (const test of tests) {
   console.log(`\nRunning ${test}`);
   const result = spawnSync(process.execPath, [path.join(root, 'scripts', test)], {
-    cwd: root, stdio: 'inherit', timeout: 60000,
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60000,
     env: { ...process.env, QQ_BRIDGE_TEST_LIVE: '0' },
   });
-  if (result.status !== 0 || result.error) {
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  const coverage = classifyAuditResult(result);
+  if (coverage.gaps.length) incomplete.push({ test, gaps: coverage.gaps });
+  if (coverage.state === 'failed') {
     failed++;
     console.error(`FAILED ${test}: ${result.error?.message || `exit ${result.status}`}`);
   }
 }
 console.log(`\nAudit suite: ${tests.length - failed}/${tests.length} scripts passed.`);
+console.log(`Coverage gaps: ${incomplete.length} scripts contain skipped checks (not fully verified).`);
+for (const { test, gaps } of incomplete) {
+  console.log(`  ${test}`);
+  for (const gap of gaps) console.log(`    ${gap}`);
+}
 process.exitCode = failed ? 1 : 0;

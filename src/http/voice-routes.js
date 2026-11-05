@@ -55,7 +55,7 @@ export async function handleVoiceRoutes({ req, url, sendJson, readBody, deps }) 
     const key = String(body.target ?? body.key ?? '').trim();
     const parsedTarget = parseTargetKey(key);
     if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return true; }
-    if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, getCurrentMode())) {
+    if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, getCurrentMode(key))) {
       const a = cfg.allow ?? {};
       sendJson({
         ok: false,
@@ -155,7 +155,7 @@ export async function handleVoiceRoutes({ req, url, sendJson, readBody, deps }) 
     const voice = voiceCfg();
     if (!voice.enabled) { sendJson({ ok: false, error: '语音功能已关闭' }, 403); return true; }
     if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return true; }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return true; }
     if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return true; }
     if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return true; }

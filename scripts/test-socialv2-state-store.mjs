@@ -140,3 +140,25 @@ test('save：切片上限（recent 200 / unread 100 / sendTimes 500 / seenForwar
   h.store.save();
   assert.deepEqual(JSON.parse(fs.readFileSync(h.file, 'utf8')).conversations['group:1'].memberImpressions, {});
 });
+
+for (const raw of ['{', '', 'null', '[]', '{"conversations":[]}']) {
+  test(`损坏或结构异常的二代状态必须只读，不得覆盖：${JSON.stringify(raw)}`, (t) => {
+    const h = setup();
+    t.after(() => fs.rmSync(h.dir, { recursive: true, force: true }));
+    fs.writeFileSync(h.file, raw);
+    h.store.load();
+    h.store.get('group:1');
+    assert.equal(h.store.save(), false);
+    assert.equal(fs.readFileSync(h.file, 'utf8'), raw);
+  });
+}
+
+test('加载期间外部修改后，后续 save 仍不得覆盖它', (t) => {
+  const h = setup({ fileContent: { conversations: { 'group:1': {} } } });
+  t.after(() => fs.rmSync(h.dir, { recursive: true, force: true }));
+  const external = '{"paused":true,"conversations":{"group:2":{}}}';
+  h.hooks.ensureWakeable = () => fs.writeFileSync(h.file, external);
+  h.store.load();
+  h.store.save();
+  assert.equal(fs.readFileSync(h.file, 'utf8'), external);
+});

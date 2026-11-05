@@ -10,6 +10,31 @@ import {
 const ownerQQ = 42; // Synthetic test identity.
 const ownerKey = `private:${ownerQQ}`;
 
+test('simulation fingerprint is stable when the configured owner changes', () => {
+  const state = createInitialConversationState(null);
+  const first = new SessionRouter({ ownerQQ: 42, state });
+  const second = new SessionRouter({ ownerQQ: 99, state });
+  assert.equal(first.policyFingerprint('group:8'), second.policyFingerprint('group:8'));
+});
+
+test('an override lookup cannot mutate or widen the stored policy', () => {
+  const router = new SessionRouter({ ownerQQ });
+  const before = router.policyFingerprint(ownerKey);
+  const record = router.overrideFor(ownerKey);
+  assert.throws(() => { record.preset = 'qq-chat'; }, TypeError);
+  assert.equal(router.policyFingerprint(ownerKey), before);
+});
+
+test('loading persisted legacy defaults keeps the matched mode/preset pair and round-trips', () => {
+  const state = createInitialConversationState(null);
+  state.defaults = { mode: 'chat', preset: 'qq-chat', model: null, reasoningEffort: null };
+  const router = new SessionRouter({ state, defaultMode: 'reserved2' });
+  assert.equal(router.internalModeFor('group:8'), 'chat');
+  assert.equal(router.presetFor('group:8'), 'qq-chat');
+  const reloaded = new SessionRouter({ state: router.snapshot() });
+  assert.equal(router.policyFingerprint('group:8'), reloaded.policyFingerprint('group:8'));
+});
+
 function stateWith(key, policy) {
   const state = createInitialConversationState(ownerQQ, { closedAgentEnabled: false });
   state.conversations[key] = { updatedBy: 'console', ...policy };

@@ -47,7 +47,6 @@ export async function handleSocialV2AdminRoutes({ req, url, sendJson, readBody, 
     wakeConfigUpdatedKeys,
     markReadCalledKeys,
     wakeConfigMissCount,
-    socialV2File,
     // wake
     getCurrentMode,
     modeAllowed,
@@ -251,17 +250,33 @@ export async function handleSocialV2AdminRoutes({ req, url, sendJson, readBody, 
         scheduleProactiveCheckV2(key);
       }
     }
-    saveSocialV2State();
+    if (saveSocialV2State() === false) {
+      sendJson({ ok: false, paused: socialV2.paused, error: '当前进程的暂停状态已更新，但保存失败；请检查存储告警后重试' }, 500);
+      return true;
+    }
     sendJson({ ok: true, paused: socialV2.paused });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/socialV2/reset') {
-    bumpSessionEpoch();
-    sessionPromises.clear();
-    clearAllSocialV2Timers();
-    drainAllPromptQueues('二代状态已重置');
-    for (const key of [...socialV2.conversations.keys()]) {
+    const scoped = deps.isConversationRoutingEnabled?.() === true;
+    const keys = scoped
+      ? [...new Set([...socialV2.conversations.keys(), ...Object.keys(state.sessions), ...sessionPromises.keys()])].filter((key) => getCurrentMode(key) === 'reserved2')
+      : [...socialV2.conversations.keys()];
+    if (scoped) {
+      for (const key of keys) {
+        bumpSessionEpoch(key);
+        sessionPromises.delete(key);
+        deps.clearSocialV2Timers(key);
+        deps.drainPromptQueue(key, '二代状态已重置');
+      }
+    } else {
+      bumpSessionEpoch();
+      sessionPromises.clear();
+      clearAllSocialV2Timers();
+      drainAllPromptQueues('二代状态已重置');
+    }
+    for (const key of keys) {
       const sid = state.sessions[key];
       if (sid) {
         delete state.sessions[key];
@@ -293,7 +308,10 @@ export async function handleSocialV2AdminRoutes({ req, url, sendJson, readBody, 
     markReadCalledKeys.clear();
     wakeConfigMissCount.clear();
     socialV2.paused = false;
-    try { atomicWriteJson(socialV2File, { conversations: {} }); } catch (error) { log('重置二代状态：写空状态文件失败:', error?.message ?? error); }
+    if (saveSocialV2State() === false) {
+      sendJson({ ok: false, error: '内存状态已清理，但二代状态文件保存失败；原文件未覆盖，请检查存储告警' }, 500);
+      return true;
+    }
     log('控制台：二代 AI 状态已重置（会话、定时器、唤醒配置已清空，工具日志保留）');
     sendJson({ ok: true });
     return true;
@@ -321,7 +339,7 @@ export async function handleSocialV2AdminRoutes({ req, url, sendJson, readBody, 
     const key = String(body.key ?? '').trim();
     const reason = String(body.reason ?? 'admin').trim() || 'admin';
     if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return true; }
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(key);
     if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return true; }
     const keyMatch = /^(group|private):(\d+)$/.exec(key);
     if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return true; }

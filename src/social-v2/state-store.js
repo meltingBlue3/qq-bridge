@@ -9,9 +9,8 @@
 //   · ensureWakeable / setupSleepTimer / scheduleProactiveCheck 由 bridge 注入
 //     （它们属于唤醒调度器，且反过来会调用本仓库的 save —— 允许这种受控循环依赖）。
 
-import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { readJsonSafe, atomicWriteJson } from '../json-file.js';
+import { createJsonStore, isJsonObject } from '../json-store.js';
 
 export function createSocialV2StateStore({
   socialV2,
@@ -29,6 +28,10 @@ export function createSocialV2StateStore({
   sanitizeForwardId,
   seenForwardIds
 }) {
+  const persistence = createJsonStore({
+    file, log, fallback: () => ({ paused: false, conversations: {} }),
+    validate: (value) => isJsonObject(value) && isJsonObject(value.conversations),
+  });
   const randomToken = () => crypto.randomBytes(16).toString('hex');
 
   function get(key) {
@@ -82,20 +85,8 @@ export function createSocialV2StateStore({
 
   function load() {
     try {
-      // 记下读取时刻的文件指纹。加载末尾会统一落盘一次（为了让 ensureWakeable
-      // 中途的改动不丢），但如果这期间**别的进程**已经写过这个文件，我们手上的
-      // 内存态就是旧的 —— 再写回去等于把它那份更新的状态覆盖掉。
-      // 这不是假想：日志里出现过两个桥接实例同时启动，第二个实例在加载后立刻回写，
-      // 把第一个实例刚更新的读水位/唤醒时间/转发 id 全部退回旧值。
-      const fileStamp = (() => {
-        try {
-          const s = fs.statSync(file);
-          return `${s.size}:${s.mtimeMs}`;
-        } catch {
-          return null;
-        }
-      })();
-      const raw = readJsonSafe(file, null);
+      const raw = persistence.load();
+      if (!persistence.writable) return false;
       socialV2.paused = raw?.paused === true;
       if (raw && typeof raw.conversations === 'object') {
         const seenTokens = new Set();
@@ -181,22 +172,8 @@ export function createSocialV2StateStore({
           ensureWakeable(st, { skipSave: true, key });
           scheduleProactiveCheck(key);
         }
-        // 加载阶段统一落盘一次，避免 ensureWakeable 中途写盘覆盖未加载会话。
-        // 但只有在文件仍是「我们读到的那一份」时才写：否则说明有另一个进程写过它，
-        // 我们手里的内存态已经过时，回写会静默吞掉对方的新数据。
-        const nowStamp = (() => {
-          try {
-            const s = fs.statSync(file);
-            return `${s.size}:${s.mtimeMs}`;
-          } catch {
-            return null;
-          }
-        })();
-        if (fileStamp !== null && nowStamp !== null && fileStamp !== nowStamp) {
-          log('⚠️ state/social-v2.json 在本次加载期间被其它进程改写，跳过回写以免覆盖更新的状态（是否误开了第二个桥接实例？）');
-        } else {
-          save();
-        }
+        // The shared store refuses every stale save, not only this first rewrite.
+        save();
       }
     } catch (error) {
       log('读取 socialV2 状态失败:', error?.message ?? error);
@@ -231,11 +208,12 @@ export function createSocialV2StateStore({
           seenForwardIds: Array.from(seenForwardIds.get(key) || []).slice(-1000)
         };
       }
-      atomicWriteJson(file, obj);
+      return persistence.save(obj);
     } catch (error) {
       log('保存 socialV2 状态失败:', error?.message ?? error);
+      return false;
     }
   }
 
-  return { get, load, save };
+  return { get, load, save, get writable() { return persistence.writable; } };
 }

@@ -73,7 +73,7 @@ export async function handleAccessRoutes({ req, url, sendJson, readBody, deps })
     const kind = body.kind === 'private' ? 'private' : 'group';
     const id = Number(body.id);
     const message = String(body.message ?? '').trim();
-    const currentMode = getCurrentMode();
+    const currentMode = getCurrentMode(`${kind}:${id}`);
     if (!Number.isFinite(id) || id <= 0) { sendJson({ ok: false, error: '目标 id 无效' }, 400); return true; }
     if (!message) { sendJson({ ok: false, error: '消息不能为空' }, 400); return true; }
     if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return true; }

@@ -1,3 +1,5 @@
+import { createJsonStore, readJsonDocument } from './json-store.js';
+import { atomicWriteJson } from './json-file.js';
 // 群聊黑话/网络用语学习与迭代模块。
 //
 // 职责：
@@ -8,9 +10,6 @@
 //
 // 按 qq-bridge 轻量化为 JSON 存储 + 控制台人工确认，不引入数据库。
 
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { truncateText } from './md-to-plain.js';
 
 export const SLANG_STATUS = Object.freeze({
@@ -128,51 +127,33 @@ export function capSlangEntries(entries, max = SLANG_MAX_ENTRIES) {
  * 现在：解析失败时把原始文件另存为 `.corrupt-<时间戳>` 并抛错，让上层决定是否继续。
  */
 export function loadSlang(file, { onCorrupt } = {}) {
-  let text;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    // 文件存在但读不出来：绝不能当成「空库」，否则下一次保存会覆盖掉它。
-    throw new Error(`黑话库读取失败（${error?.code || 'unknown'}）：${error?.message ?? error}`);
-  }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  if (!text.trim()) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    const quarantine = `${file}.corrupt-${Date.now()}`;
-    try { fs.writeFileSync(quarantine, text, { encoding: 'utf8', mode: 0o600 }); } catch {}
-    const message = `黑话库 JSON 解析失败，原文已另存为 ${quarantine}：${error?.message ?? error}`;
-    onCorrupt?.(message);
-    throw new Error(message);
-  }
-  if (!Array.isArray(parsed)) {
-    const quarantine = `${file}.corrupt-${Date.now()}`;
-    try { fs.writeFileSync(quarantine, text, { encoding: 'utf8', mode: 0o600 }); } catch {}
-    const message = `黑话库顶层不是数组，原文已另存为 ${quarantine}`;
-    onCorrupt?.(message);
-    throw new Error(message);
-  }
-  return parsed.map(normalizeSlangEntry).filter((e) => e.content);
+  return readJsonDocument(file, {
+    fallback: () => [], validate: Array.isArray, quarantine: true, onCorrupt,
+  }).map(normalizeSlangEntry).filter((entry) => entry.content);
+}
+
+function prepareSlang(entries, max = SLANG_MAX_ENTRIES) {
+  return capSlangEntries((Array.isArray(entries) ? entries : [])
+    .map(normalizeSlangEntry).filter((entry) => entry.content), max);
 }
 
 export function saveSlang(file, entries, { max = SLANG_MAX_ENTRIES } = {}) {
-  const { entries: capped, dropped } = capSlangEntries(
-    (Array.isArray(entries) ? entries : []).map(normalizeSlangEntry).filter((e) => e?.content),
-    max
-  );
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(capped, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, file);
-  } catch (error) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
-  return { entries: capped, dropped };
+  const result = prepareSlang(entries, max);
+  atomicWriteJson(file, result.entries);
+  return result;
+}
+
+/** Persistent bridge adapter; exported one-shot helpers remain available for utilities. */
+export function createSlangStore(file, options = {}) {
+  const persistence = createJsonStore({ file, fallback: () => [], validate: Array.isArray, quarantine: true, ...options });
+  return {
+    load() { return persistence.load().map(normalizeSlangEntry).filter((entry) => entry.content); },
+    save(entries, { max = SLANG_MAX_ENTRIES } = {}) {
+      const result = prepareSlang(entries, max);
+      return persistence.save(result.entries) ? result : null;
+    },
+    get writable() { return persistence.writable; },
+  };
 }
 
 export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [], scope = 'global' } = {}) {

@@ -1,0 +1,3 @@
+name: qsh-sim
+description: QQ simulation preset; explicit tool delivery, no local tools.
+order: 21

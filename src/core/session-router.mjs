@@ -402,14 +402,10 @@ export function migrateLegacyMode({ mode, ownerQQ, modePresets } = {}) {
 /**
  * Read-only policy lookup. Construct once per config change; never mutate.
  *
- * `defaultMode` is the process-global mode and is used for any conversation that
- * has no explicit entry. That is what makes this a drop-in replacement during the
- * migration: behaviour for conversations without an override is unchanged.
- * The legacy spellings are accepted here (`reserved2` is what the running bridge
- * still has persisted) and are stored in canonical form — storing the raw
- * spelling would pair e.g. `reserved2` with the canonical `qsh-sim` preset and
- * then reject that same state on the next load, i.e. the router could not read
- * back what it had just written.
+ * `defaultMode` provisions missing state. A supplied state has already named
+ * both its default mode and preset, so loading preserves that validated pair.
+ * Legacy spellings remain available for explicit compatibility records; fresh
+ * state and migration helpers emit the canonical simulation default.
  */
 export class SessionRouter {
   #ownerQQ;
@@ -432,12 +428,10 @@ export class SessionRouter {
     // is `first-run` / `migration` — see `normalizePolicy`.
     this.#state = normalizeState(init, this.#ownerQQ, this.#modePresets);
 
-    // An explicit defaultMode wins over the persisted default: the DSH setting
-    // is still authoritative for "what is the global mode right now". It cannot
-    // introduce a privileged default — `defaults` is validated above and
-    // `closed-agent` is refused there.
-    const dm = normalizeMode(defaultMode);
-    if (dm !== 'closed-agent') this.#state.defaults.mode = LEGACY_TO_CANONICAL[dm];
+    // Persisted policy is authoritative. Changing only its mode on load would
+    // pair a legacy preset with another protocol and create an unloadable state.
+    // defaultMode provisions missing state; it never rewrites an existing record.
+    normalizeMode(defaultMode);
     this.#defaultMode = this.#state.defaults.mode;
   }
 
@@ -459,7 +453,8 @@ export class SessionRouter {
   /** The conversation entry, or null when this key has no explicit override. */
   overrideFor(key) {
     const canonical = requireKey(key);
-    return own(this.#state.conversations, canonical) ? this.#state.conversations[canonical] : null;
+    return own(this.#state.conversations, canonical)
+      ? Object.freeze(structuredClone(this.#state.conversations[canonical])) : null;
   }
 
   /** Resolved policy for a conversation. Never returns a privileged mode by default. */
@@ -535,7 +530,8 @@ export class SessionRouter {
   /** Stable identity of the policy; a change means the session must be rebuilt. */
   policyFingerprint(key) {
     const { mode, preset, model, reasoningEffort } = this.policyFor(key);
-    return JSON.stringify([mode, preset, model, reasoningEffort, this.#ownerQQ]);
+    return JSON.stringify([mode, preset, model, reasoningEffort,
+      mode === 'closed-agent' ? this.#ownerQQ : null]);
   }
 
   /**

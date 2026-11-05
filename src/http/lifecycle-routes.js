@@ -69,7 +69,7 @@ export async function handleLifecycleRoutes({ req, url, sendJson, readBody, deps
     const body = await readBody();
     const key = String(body.key ?? '');
     if (!key || !state.sessions[key]) { sendJson({ ok: false, error: '会话不存在' }, 404); return true; }
-    bumpSessionEpoch();
+    bumpSessionEpoch(key);
     const oldSessionId = state.sessions[key];
     delete state.sessions[key];
     modelAppliedSessions.delete(oldSessionId);

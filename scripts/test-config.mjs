@@ -40,6 +40,18 @@ test('空配置得到完整默认值', () => {
   assert.equal(cfg.socialV2.media.maxBytes, 8 * 1024 * 1024);
 });
 
+test('示例是默认值生成物，加载器不会改写用户配置', () => {
+  const root = fixture({ socialV2: { wait: { defaultQuietMs: 0 } }, future: { enabled: false }, nullableFuture: null });
+  const file = path.join(root, 'config.json');
+  const before = fs.readFileSync(file, 'utf8');
+  try {
+    const { cfg } = loadConfig({ root, discoverDshLaunchToken: () => '' });
+    assert.equal(cfg.future.enabled, false);
+    assert.equal(cfg.nullableFuture, null);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('socialV2 工具/表情/媒体做深度合并，不让旧配置丢新增默认值', () => {
   const { cfg } = load({
     socialV2: {
@@ -77,4 +89,36 @@ test('ownerQQ / 白名单规范化保持 fail-closed', () => {
   assert.throws(() => normalizeOwnerQQ('abc'));
   assert.deepEqual(normalizeIdList(['1', 2, 'x', null]), ['1', '2']);
   assert.deepEqual(normalizeIdList('not-array'), []);
+});
+
+test('示例配置与空配置的有效默认值一致，不含真实凭据或额外示范模型', () => {
+  const example = JSON.parse(fs.readFileSync(new URL('../config.example.json', import.meta.url), 'utf8'));
+  assert.deepEqual(load(example).cfg, load({}).cfg);
+  assert.equal(example.dsh.authToken, '');
+  assert.equal(example.consoleToken, '');
+  assert.equal(example.snowluma.accessToken, '');
+  assert.equal(example.webSearch.apiKey, '');
+  assert.equal(example.allowAllWhenEmpty, false);
+});
+
+test('所有嵌套配置保留默认项；零值、关闭开关、数组替换仍生效', () => {
+  const { cfg } = load({ socialV2: {
+    wake: { recommendedProbability: 0, recommendedKeywords: [] },
+    wait: { defaultQuietMs: 0 }, send: { burstEnabled: false },
+  } });
+  assert.equal(cfg.socialV2.wake.sleepMinMs, 60000);
+  assert.equal(cfg.socialV2.wake.recommendedProbability, 0);
+  assert.deepEqual(cfg.socialV2.wake.recommendedKeywords, []);
+  assert.equal(cfg.socialV2.wait.defaultQuietMs, 0);
+  assert.equal(cfg.socialV2.wait.maxMs, 600000);
+  assert.equal(cfg.socialV2.send.burstEnabled, false);
+  assert.equal(cfg.socialV2.send.maxSendPerMinute, 8);
+});
+
+test('畸形子对象不会清掉工具与媒体默认限制', () => {
+  const { cfg } = load({ dsh: [], socialV2: { tools: null, voice: [], media: 'bad' } });
+  assert.equal(cfg.dsh.baseUrl, 'http://127.0.0.1:3080');
+  assert.equal(cfg.socialV2.tools.sendVoice, false);
+  assert.equal(cfg.socialV2.voice.enabled, false);
+  assert.equal(cfg.socialV2.media.maxBytes, 8388608);
 });

@@ -152,7 +152,7 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     }
     const waitedMs = Date.now() - start;
     if (socialV2.conversations.get(canonicalV2Key(key)) !== st ||
-        (req.headers['x-agent-token'] && (getCurrentMode() !== 'reserved2' || socialV2.paused || cfg.socialV2?.enabled === false
+        (req.headers['x-agent-token'] && (getCurrentMode(key) !== 'reserved2' || socialV2.paused || cfg.socialV2?.enabled === false
           || !agentTokenOk(key, req.headers['x-agent-token']) || !v2SessionAllowed(key) || !v2ToolEnabled('waitMessages')))) {
       finishWait();
       sendJson({ ok: false, error: '等待期间会话已重置或权限已变化，请重新读取会话' }, 403);

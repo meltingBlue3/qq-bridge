@@ -69,20 +69,24 @@ wake-scheduler），bridge.js 剩余部分是消息管道、prompt 构建与 DSH
 每一步必须满足：`node --check src/bridge.js` 通过、`npm run test:audit` 全绿、
 新增模块有直接单测（不经过 VM 源码注入）。
 
-### P1 — `config.example.json` 仍是手写模板
+### P1 — 配置模板与默认值（2026-11-05 已实现）
 
-`loadConfig()` 已迁到 `src/config.js`，默认值只剩这一份；但 `config.example.json` 还是
-另一份手写模板，两者靠人工同步。下一步由 `src/config.js` 的默认值生成
-`config.example.json`，并加一个键集合/类型契约测试（敏感字段必须为空）。
+默认值统一到 `src/config-defaults.js`，加载器、搜索和媒体模块共用；示例由
+`npm run build:config` 生成，`npm run verify:config` 只检查不写入。完整默认值、生成物、
+空凭据、嵌套合并及副本隔离均有直接测试，用户配置不被自动改写。
 
-### P1 — 状态文件各自手写加载/保存
+### P1 — 状态文件加载/保存（2026-11-05 已接入共用保护）
 
-`initial-prompts.json` 已抽到 `src/initial-prompts.js`（带只读降级单测）；`sessions.json`、
-`social-v2.json`、`slang.json`、`stickers.json` 仍各自重复「读失败 → 只读降级 / 损坏 → 不覆盖」
-的样板。下一步抽 `src/json-store.js`（`createJsonStore({file, fallback, onCorrupt})`），
-统一可写标志与原子落盘，并把剩余存储逐个迁过去。
+`src/json-store.js` 共用结构校验、只读降级、原子写、失败重试及原文冲突检测。
+会话映射、二代状态、初始提示词、黑话和表情库已迁入；模式、角色、反馈、学习会话
+元数据通过严格读改写保护原文件。配置 HTTP 更新有未知字段保留和故障注入回归。
+接口与限制见 [CONFIG_AND_STATE.md](CONFIG_AND_STATE.md)；文件冲突保护不是多进程事务锁。
 
 ### P2 — 测试仍有一部分是源码字符串断言
+
+消息核心现已拆为 `src/core/` 下的解析、队列、离线积压、会话生命周期、回复发送与
+分条格式六个模块。它们均有直接测试，`npm run test:core` 同时覆盖主程序接线。
+URL 分段回归已从截取函数源码 `eval` 改为导入模块；媒体元数据测试也直接导入解析器。
 
 `test-voice.mjs` 等用 `bridge.includes('...')` 找端点，属于过渡手段。随着模块外移，
 这些断言应改为导入模块并断言接口；在完成前，**新增源码字符串断言需要说明为什么无法

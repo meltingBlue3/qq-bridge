@@ -9,6 +9,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "build:config": "node scripts/build-config-example.mjs",
+    "verify:config": "node scripts/build-config-example.mjs --check",
+    "test:storage": "node --test scripts/test-json-store.mjs scripts/test-config.mjs scripts/test-config-example.mjs scripts/test-config-persistence.mjs scripts/test-socialv2-state-store.mjs scripts/test-initial-prompts.mjs",
+    "test:core": "node --test scripts/test-conversation-queue.mjs scripts/test-inbound-parser.mjs scripts/test-offline-backlog.mjs scripts/test-session-lifecycle.mjs scripts/test-reply-sender.mjs scripts/test-reply-formatting.mjs scripts/test-delivery-order.mjs scripts/test-send-chains.mjs scripts/test-policy-revocation.mjs",
+    "test:routing": "node --test src/core/session-router.test.mjs scripts/test-conversation-policy-store.mjs scripts/test-conversation-routes.mjs scripts/test-conversation-routing.mjs scripts/test-preset-local-tools.mjs",
+    "test:delivery": "node --test scripts/test-outbound-delivery.mjs scripts/test-dsh-turn-log.mjs scripts/test-turn-delivery-recovery.mjs scripts/test-offline-backlog.mjs scripts/test-conversation-routing.mjs",
     "start": "node src/bridge.js",
     "test:audit": "node scripts/test-audit.mjs",
     "test:token": "node scripts/test-token-economy.mjs && node scripts/test-reply-wait.mjs && node scripts/test-qq-model-view.mjs && node scripts/test-qq-preset-contract.mjs",

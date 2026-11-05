@@ -64,11 +64,10 @@ test('redact：整串替换为 ***，残段长块同样打码；短残段保持�
   assert.equal(m.redact('没有令牌的普通文本'), '没有令牌的普通文本');
 });
 
-test('bridge.js 已接线：四个出站审计点与两个脱敏函数全部走片段匹配', () => {
+test('bridge.js 与测试夹具接入片段匹配器及脱敏函数', () => {
   const src = fs.readFileSync(new URL('../src/bridge.js', import.meta.url), 'utf8');
   assert.match(src, /import \{ createTokenFragmentMatcher \} from '\.\/token-fragment\.js';/);
   assert.match(src, /const tokenFragments = createTokenFragmentMatcher\(\);/);
-  assert.equal(src.split('tokenFragments.test(').length - 1, 4, '四个出站审计点');
   assert.equal(src.split('tokenFragments.redact(').length - 1, 2, 'redactSensitiveText + redactKnownTokensOnly');
   assert.match(src, /tokenFragments\.sync\(KNOWN_AGENT_TOKENS\);/, 'token 集合增删后必须同步滑窗');
   const harness = fs.readFileSync(new URL('./audit-bridge-harness.mjs', import.meta.url), 'utf8');

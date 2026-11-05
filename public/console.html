@@ -1811,6 +1811,31 @@ button:active:not(:disabled) {
       </div>
       <div class="meta">切换后即时保存。仿真参数可在左侧对应页面调整；封闭 Agent 仅允许管理员私聊。</div>
     </section>
+<section id="section-routing" data-page="overview" class="card span-all">
+      <h2>逐会话模式</h2>
+      <div class="meta">让群聊仿真与管理员私聊操作同时运行。迁移会将旧仿真模式转为二代协议；只有管理员本人私聊可开启本地工具。白名单仍然生效。</div>
+      <div class="row" style="margin-top:12px">
+        <button id="routingMigrate">迁移并启用</button>
+        <button id="routingRollback">回退到全局模式</button>
+        <span class="meta" id="routingStatus" role="status">正在读取…</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label>会话 <input type="text" id="routingKey" placeholder="group:群号 或 private:QQ号" list="routingKnownKeys"></label>
+        <datalist id="routingKnownKeys"></datalist>
+        <button id="routingLoad">读取此会话</button>
+        <label>模式 <select id="routingMode"><option value="simulation">仿真</option><option value="closed-agent">管理员操作</option><option value="chat">旧聊天</option><option value="reserved">旧一代仿真</option><option value="reserved2">旧二代仿真</option></select></label>
+        <label>预设 <select id="routingPreset"></select></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label>模型 <input type="text" id="routingModel" placeholder="模型 ID；留空跟随默认"></label>
+        <label>思考强度 <input type="text" id="routingEffort" placeholder="如 high；留空跟随默认"></label>
+        <button id="routingSave">保存此会话</button>
+        <button id="routingDelete">恢复默认策略</button>
+      </div>
+      <div class="meta" id="routingResult" role="status"></div>
+      <div id="routingEntries" style="margin-top:12px;overflow-x:auto"></div>
+      <details style="margin-top:12px"><summary>策略变更记录</summary><div id="routingAudit" class="meta"></div></details>
+    </section>
 <section id="section-sessions" data-page="sessions" class="card span-all">
       <h2>会话映射</h2>
       <div id="sessionList">加载中…</div>
@@ -1882,6 +1907,8 @@ button:active:not(:disabled) {
         <select id="simPromptPreset" style="flex:0 1 280px">
           <option value="qq-chat-v2">二代仿真（reserved2 · qq-chat-v2）</option>
           <option value="qq-chat">一代仿真（reserved · qq-chat）</option>
+          <option value="qsh-sim">逐会话仿真（qsh-sim）</option>
+          <option value="qsh-sim-v2">逐会话仿真（qsh-sim-v2）</option>
         </select>
         <span class="meta">两代机制不同（一代空格分条 / 二代一切皆工具），提示词各自独立。</span>
       </div>
@@ -2723,13 +2750,89 @@ function renderSnowlumaHealth(sl) {
   el.style.display = '';
 }
 
+let routingDocument = null;
+let routingOwner = null;
+const routingPresets = { simulation: ['qsh-sim', 'qsh-sim-v2', 'qq-chat-v2'], 'closed-agent': ['qsh-closed'], chat: ['qq-chat'], reserved: ['qq-chat'], reserved2: ['qq-chat-v2'] };
+function fillRoutingPresets(selected) {
+  const mode = document.getElementById('routingMode').value;
+  const select = document.getElementById('routingPreset');
+  select.innerHTML = (routingPresets[mode] || []).map((value) => '<option value="' + esc(value) + '">' + esc(value) + '</option>').join('');
+  if (selected && [...select.options].some((option) => option.value === selected)) select.value = selected;
+}
+async function refreshRouting() {
+  try {
+    const result = await api('/api/conversations');
+    if (!result.ok) throw new Error(result.error || '读取策略失败');
+    routingDocument = result.document;
+    const enabled = !!result.enabled;
+    const writable = result.writable !== false;
+    document.getElementById('routingStatus').textContent = result.error ? '存储告警：' + result.error : enabled ? '已启用逐会话模式' : '当前使用全局模式';
+    for (const id of ['routingSave', 'routingDelete']) document.getElementById(id).disabled = !enabled || !writable;
+    document.getElementById('routingMigrate').disabled = enabled || !writable;
+    document.getElementById('routingRollback').disabled = !enabled || !writable;
+    const entries = Object.entries(routingDocument?.policy?.conversations || {});
+    document.getElementById('routingKnownKeys').innerHTML = entries.map(([key]) => '<option value="' + esc(key) + '"></option>').join('');
+    document.getElementById('routingEntries').innerHTML = entries.length
+      ? '<table><thead><tr><th>会话</th><th>模式</th><th>预设</th><th>模型 / 强度</th></tr></thead><tbody>' + entries.map(([key, policy]) => '<tr><td>' + esc(key) + '</td><td>' + esc(policy.mode === 'closed-agent' ? '管理员操作' : policy.mode === 'simulation' ? '仿真' : policy.mode) + '</td><td>' + esc(policy.preset) + '</td><td>' + esc(policy.model || '默认') + ' / ' + esc(policy.reasoningEffort || '默认') + '</td></tr>').join('') + '</tbody></table>'
+      : '<span class="meta">没有单独设置的会话；启用后默认使用仿真策略。</span>';
+    document.getElementById('routingAudit').textContent = (routingDocument?.audit || []).slice(-20).reverse().map((entry) => new Date(entry.at).toLocaleString() + ' · ' + entry.updatedBy + ' · ' + (entry.key || '全局') + ' · ' + entry.type).join('； ') || '暂无变更';
+  } catch (error) { document.getElementById('routingStatus').textContent = '读取失败：' + error.message; }
+}
+function loadRoutingEditor() {
+  const key = document.getElementById('routingKey').value.trim();
+  const policy = routingDocument?.policy?.conversations?.[key] || routingDocument?.policy?.defaults;
+  if (!policy) return;
+  document.getElementById('routingMode').value = policy.mode;
+  fillRoutingPresets(policy.preset);
+  document.getElementById('routingModel').value = policy.model || '';
+  document.getElementById('routingEffort').value = policy.reasoningEffort || '';
+}
+async function routingAction(path, method, body) {
+  const message = document.getElementById('routingResult');
+  message.textContent = '正在保存…';
+  try {
+    const result = await api(path, method, body);
+    if (!result.ok) throw new Error((result.committed ? '策略已保存，但运行时应用失败；请重启桥接。' : '') + (result.error || '操作失败'));
+    await refresh();
+    message.textContent = '已保存；策略有变化的会话将在下次处理时重建。';
+    message.className = 'meta ok';
+  } catch (error) { message.textContent = error.message; message.className = 'meta err'; }
+}
+fillRoutingPresets();
+document.getElementById('routingMode').addEventListener('change', () => fillRoutingPresets());
+document.getElementById('routingLoad').addEventListener('click', loadRoutingEditor);
+document.getElementById('routingMigrate').addEventListener('click', () => routingAction('/api/conversations/migrate', 'POST', {}));
+document.getElementById('routingRollback').addEventListener('click', () => routingAction('/api/conversations/rollback', 'POST', {}));
+document.getElementById('routingDelete').addEventListener('click', () => {
+  const key = document.getElementById('routingKey').value.trim();
+  routingAction('/api/conversations/policy?key=' + encodeURIComponent(key), 'DELETE', {});
+});
+document.getElementById('routingSave').addEventListener('click', () => {
+  const key = document.getElementById('routingKey').value.trim();
+  const mode = document.getElementById('routingMode').value;
+  if (!/^(group|private):[1-9]\d*$/.test(key) || mode === 'closed-agent' && key !== 'private:' + routingOwner) {
+    document.getElementById('routingResult').textContent = '请填写有效会话；管理员操作仅允许管理员本人私聊。'; return;
+  }
+  routingAction('/api/conversations/policy', 'POST', { key, policy: { mode,
+    preset: document.getElementById('routingPreset').value,
+    model: document.getElementById('routingModel').value.trim() || null,
+    reasoningEffort: document.getElementById('routingEffort').value.trim() || null,
+  } });
+});
+
 async function refresh() {
   try {
     const s = await api('/api/status');
+    routingOwner = s.ownerQQ;
+    const routed = !!s.routing?.enabled;
+    const blocked = routed || !!s.routing?.error;
+    document.querySelectorAll('#modeRow button').forEach((button) => { button.disabled = blocked; });
+    document.getElementById('closedPreset').disabled = blocked;
+    await refreshRouting();
     document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
-    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
+    const modeLabel = routed ? '逐会话路由' : s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
     updateOverview(s, modeLabel);
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
@@ -2936,11 +3039,11 @@ async function refreshSimPrompt() {
     setSimMsg('');
     const status = r.status || {};
     document.getElementById('simPromptStatus').textContent =
-      `${status.label || simPromptPreset} · ${r.chars} 字符${status.installed ? ' · 已同步到 DSH' : ' · 尚未同步到 DSH'}`;
+      `${status.label || simPromptPreset} · ${r.chars} 字符${status.synced ? ' · 预设文件已同步' : ' · 预设文件待同步'}`;
     document.getElementById('simPromptWarnings').textContent = (r.warnings || []).length
       ? '⚠️ ' + r.warnings.join('；') : '';
     document.getElementById('simPromptRestart').textContent =
-      '改动写入该代预设的源文件并同步到 DSH 的 preset 目录；preset 由 DSH 在会话创建时装配，因此新会话会自动用新版，正在进行的 QQ 会话需重置该会话或重启 DSH。';
+      '编辑会话实际使用的预设；各套内容独立。保存会同步该套预设文件，重启 DSH 后生效；仅重置 QQ 会话不能替代重启加载。首次使用还需完成 DSH 端安装。';
   } catch (error) {
     setSimMsg('读取失败：' + (error?.message ?? error), false);
   }
@@ -3106,11 +3209,11 @@ document.getElementById('simPromptCancel').addEventListener('click', () => {
 document.getElementById('simPromptPreset').addEventListener('change', () => { refreshSimPrompt(); });
 document.getElementById('simPromptSave').addEventListener('click', async () => {
   const content = document.getElementById('simPromptText').value;
-  if (!confirm('保存会改写该代预设的源文件并同步到 DSH 的 preset 目录（新会话生效，进行中的会话需重置或重启 DSH）。确定继续？')) return;
+  if (!confirm('保存会更新该代仿真提示词并同步预设文件，重启 DSH 后生效。确定继续？')) return;
   setSimMsg('保存中…');
   const r = await api('/api/preset/sim-prompt', 'POST', { preset: simPromptPreset, content });
   if (!r.ok) { setSimMsg('❌ ' + (r.error || '保存失败'), false); return; }
-  if (r.unchanged) {
+  if (r.unchanged && !r.requiresRestart) {
     simPromptOriginal = content;
     setSimEditing(false);
     setSimMsg('内容没有变化，未写入文件（避免无谓地重排预设格式）', true);
@@ -3118,7 +3221,7 @@ document.getElementById('simPromptSave').addEventListener('click', async () => {
   }
   simPromptOriginal = content;
   setSimEditing(false);
-  setSimMsg(`✅ 已保存${r.synced ? '并同步到 DSH' : ''}；重启 DSH 后生效`, true);
+  setSimMsg(`✅ ${r.unchanged ? '正文未变，已修复预设同步' : '已保存并同步预设文件'}；重启 DSH 后生效`, true);
   document.getElementById('simPromptWarnings').textContent = (r.warnings || []).length ? '⚠️ ' + r.warnings.join('；') : '';
   document.getElementById('simPromptStatus').textContent = `${r.status?.label || simPromptPreset} · ${content.length} 字符 · 已保存，待重启 DSH`;
 });

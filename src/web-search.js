@@ -1,3 +1,4 @@
+import { createDefaultConfig } from './config-defaults.js';
 // 联网搜索（MCP `web_search` 的实现）。
 //
 // 设计目标：**优先复用 DSH 原本的联网搜索能力**，而不是自己抓 Bing 的搜索结果页。
@@ -29,28 +30,18 @@ import { URL } from 'node:url';
 import YAML from 'js-yaml';
 import { resolveSafeAddresses, safeFetch } from './safe-fetch.js';
 
+const defaultConfig = Object.freeze(createDefaultConfig().webSearch);
+
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/anthropic/v1';
-const DEFAULT_MODEL = 'deepseek-v4-flash';
+const DEFAULT_MODEL = defaultConfig.model;
 const DEFAULT_API_VERSION = '2023-06-01';
-const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY';
-const DEFAULT_TIMEOUT_MS = 35000;
+const DEFAULT_API_KEY_ENV = defaultConfig.apiKeyEnv;
+const DEFAULT_TIMEOUT_MS = defaultConfig.timeoutMs;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 64;
 // Anthropic 兼容响应里文本块/结果块都可能有；这里只要结构化结果。
 const SEARCH_TOOL_TYPE = 'web_search_20250305';
-
-const defaultConfig = Object.freeze({
-  provider: 'auto',
-  apiKey: '',
-  apiKeyEnv: DEFAULT_API_KEY_ENV,
-  baseURL: '',
-  model: DEFAULT_MODEL,
-  maxUses: 5,
-  maxTokens: 4096,
-  maxResults: 8,
-  timeoutMs: DEFAULT_TIMEOUT_MS
-});
 
 function num(value, fallback, min, max) {
   const n = Number(value);

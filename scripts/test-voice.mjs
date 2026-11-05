@@ -16,6 +16,8 @@ import {
 } from '../src/send-voice-lib.js';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
+import { loadConfig } from '../src/config.js';
+import { splitLongSegment } from '../src/core/reply-formatting.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -134,11 +136,13 @@ console.log('## 配置项（AI 发语音默认关闭，等语音库准备好再�
   const ex = exCfg;
   ok(ex.socialV2?.voice?.dir === 'audio', 'config.example.json 含 voice 段');
   // 代码里的默认值也必须一致，否则删掉 config.json 里那两行就会变回"默认开"。
-  // 默认值现在在 src/config.js（bridge.js 只保留流程），两处一起看，避免模块搬家让测试假红。
-  const defaultsSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8')
-    + fs.readFileSync(path.join(ROOT, 'src', 'config.js'), 'utf8');
-  ok(/sendVoice: false,/.test(defaultsSrc), 'config.js 里 tools 默认 sendVoice: false');
-  ok(/cfg\.socialV2\.voice = \{\s*\n\s*enabled: false,/.test(defaultsSrc), 'config.js 里 voice 默认 enabled: false');
+  const defaultsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-voice-defaults-'));
+  try {
+    fs.writeFileSync(path.join(defaultsDir, 'config.json'), '{}');
+    const { cfg } = loadConfig({ root: defaultsDir, discoverDshLaunchToken: () => '' });
+    ok(cfg.socialV2.tools.sendVoice === false, '实际加载空配置时 tools.sendVoice=false');
+    ok(cfg.socialV2.voice.enabled === false, '实际加载空配置时 voice.enabled=false');
+  } finally { fs.rmSync(defaultsDir, { recursive: true, force: true }); }
 }
 
 console.log('## MCP 工具与 bridge 路由');
@@ -279,14 +283,7 @@ console.log('## 回归：长消息里的 URL 不许被切碎（P1，曾静默丢
 {
   // 由来：splitLongSegment 用 \u0000URL<n>\u0000 占位符保护 URL，但对超长片段直接按
   // max 硬切，会拦腰切断占位符 → 还原正则失配 → URL 整条消失 + 裸 NUL + 字面量 "URL0"
-  // 被发进 QQ 消息。这里把函数从 bridge.js 抽出来，对 1..max+20 所有长度做校验。
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
-  const at = src.indexOf('function splitLongSegment');
-  ok(at > 0, '在 bridge.js 里找到 splitLongSegment');
-  if (at > 0) {
-    const endMarker = src.indexOf('\n  }', src.indexOf('return out', at));
-    const fnSrc = src.slice(at, endMarker + 4);
-    const splitLongSegment = eval(`(${fnSrc})`);   // eslint-disable-line no-eval
+  // 被发进 QQ 消息。这里直接导入格式模块，对 1..max+20 所有长度做校验。
     const url = 'https://example.com/very/long/path?q=1&x=2';
     const max = 500;
     let broken = 0;
@@ -302,7 +299,6 @@ console.log('## 回归：长消息里的 URL 不许被切碎（P1，曾静默丢
     ok(worst <= max + 40, '分段长度仍在合理范围（占位符不可切的让步）', `最长 ${worst}`);
     const two = splitLongSegment('啊'.repeat(600) + url + '中间' + url, max).join('');
     ok(two.includes(url) && two.split(url).length - 1 === 2, '两个 URL 都保留');
-  }
 }
 
 console.log('## 回归：AI 通道的语音库响应不许带出绝对路径（P1）');

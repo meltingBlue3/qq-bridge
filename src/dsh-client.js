@@ -664,6 +664,13 @@ export class NodeApiClient extends AbstractApiClient {
     },
   };
 
+  /** Read older history against the inclusive cursor of a session/follow snapshot. */
+  async readSessionHistoryPage(sessionId, { throughSeq, beforeSeq, maxMessages = 50 }, signal) {
+    return unwrap(await this.callUnary('session.page', {
+      address: { kind: 'session', sessionId }, throughSeq, beforeSeq, maxMessages,
+    }, signal), 'session.page');
+  }
+
   openRemoteEventStream(signal, onOpen) {
     const gen = this._remoteMuxGenerator(signal, onOpen);
     return {

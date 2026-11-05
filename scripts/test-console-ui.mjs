@@ -156,8 +156,7 @@ try {
     }));
     assert.match(shown.path, /state/, '应当显示 state 目录路径');
     assert.match(shown.cmd, /icacls/, '应当给出可复制的提权命令');
-    // 只验证按钮确实发起「重新检测」请求，**不**写进/触发 baseline 的写载荷契约
-    // （baseline 记录的是改版前控制台的表单写载荷，这条不算表单写）。
+    // 独立核对后加入下方的显式契约增量，历史 JSON 基线保持原样。
     await page.waitForFunction(() => document.getElementById('stateDirReharden') !== null);
     const [request] = await Promise.all([
       page.waitForRequest(r => new URL(r.url()).pathname === '/api/security' && r.method() === 'POST'),
@@ -248,9 +247,66 @@ try {
     assert(results.every(x => x.ok), 'Cannot record a baseline from a failed suite');
     await writeFile(baselinePath, JSON.stringify(fixture.requests, null, 2) + '\n');
     console.log(`Recorded original API contracts: ${baselinePath}`);
-  } else await test('All submitted payloads exactly match the pre-redesign console baseline', async () => {
+  } else await test('All submitted payloads match the legacy baseline plus explicit ACL and voice additions', async () => {
     const expected = JSON.parse(await readFile(baselinePath, 'utf8'));
+    if (!original) {
+      // Both additions predate this sync fix (also reproduced against HEAD's
+      // console and test). Keep the historic recording immutable and enumerate
+      // the exact additions, rather than ignoring unknown fields or requests.
+      const securityIndex = expected.findIndex((write) => write.path === '/api/security');
+      assert.ok(securityIndex >= 0);
+      expected.splice(securityIndex + 1, 0, {
+        method: 'POST', path: '/api/security', body: { rehardenStateDir: true },
+      });
+      for (const write of expected) {
+        if (write.path === '/api/socialV2/config') write.body.tools.sendVoice = true;
+      }
+    }
     assert.deepEqual(fixture.requests, expected);
+  });
+
+  if (!original) await test('Per-conversation migration, policy editing, validation and rollback', async () => {
+    await navigate('overview');
+    await page.locator('#routingMigrate').click();
+    await page.waitForFunction(() => document.getElementById('routingStatus').textContent.includes('已启用'));
+    assert.equal(await page.locator('#modeRow button').first().isDisabled(), true);
+    const owner = String(fixture.state.whitelist.ownerQQ);
+    await page.locator('#routingKey').fill('private:' + owner);
+    await page.locator('#routingMode').selectOption('closed-agent');
+    await page.locator('#routingSave').click();
+    await page.waitForFunction(() => document.getElementById('routingEntries').textContent.includes('管理员操作'));
+    assert.deepEqual(fixture.requests.at(-1).body, { key: 'private:' + owner, policy: { mode: 'closed-agent', preset: 'qsh-closed', model: null, reasoningEffort: null } });
+    const writes = fixture.requests.length;
+    await page.locator('#routingKey').fill('group:123456789');
+    await page.locator('#routingSave').click();
+    assert.match(await page.textContent('#routingResult'), /仅允许管理员本人私聊/);
+    assert.equal(fixture.requests.length, writes);
+    await page.locator('#routingMode').selectOption('simulation');
+    await page.locator('#routingPreset').selectOption('qsh-sim-v2');
+    await page.locator('#routingSave').click();
+    await page.waitForFunction(() => document.getElementById('routingEntries').textContent.includes('qsh-sim-v2'));
+    await page.locator('#routingDelete').click();
+    await page.waitForFunction(() => !document.getElementById('routingEntries').textContent.includes('group:123456789'));
+    await page.locator('#routingRollback').click();
+    await page.waitForFunction(() => document.getElementById('routingStatus').textContent.includes('全局模式'));
+    assert.equal(await page.locator('#modeRow button').first().isDisabled(), false);
+  });
+
+  if (!original) await test('Routing migration failure preserves global controls and explains the backend error', async () => {
+    await navigate('overview');
+    await page.route('**/api/conversations/migrate', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: '请先安装并重启 DSH' }) }));
+    try {
+      const expectedError = page.waitForEvent('console', { predicate: (message) => message.type() === 'error' && message.text().includes('status of 409') });
+      await page.locator('#routingMigrate').click();
+      const resourceError = await expectedError;
+      await page.waitForFunction(() => document.getElementById('routingResult').textContent.includes('请先安装'));
+      assert.equal(resourceError.text(), 'Failed to load resource: the server responded with a status of 409 (Conflict)');
+      const errorIndex = errors.lastIndexOf(resourceError.text());
+      assert.ok(errorIndex >= 0);
+      errors.splice(errorIndex, 1); // This exact HTTP failure is injected by this test.
+      assert.equal(await page.locator('#modeRow button').first().isDisabled(), false);
+      assert.equal(await page.locator('#routingSave').isDisabled(), true);
+    } finally { await page.unroute('**/api/conversations/migrate'); }
   });
 
   if (!original) await test('Token usage panel renders totals, per-conversation and per-turn cost', async () => {
@@ -320,13 +376,13 @@ try {
     // 切范围：重新请求并按生产同一套桶宽阶梯换粒度
     // （24h→30min / 3d→2h / 7d→6h / 30d→24h，桶数始终 ≤ 48）
     await page.click('#usageChartControls [data-usage-hours="168"]');
-    await page.waitForFunction(() => /每格 \d+ 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
+    await page.waitForFunction(() => /每格 360 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
       && document.querySelector('#usageChartControls [data-usage-hours="168"]')?.classList.contains('active'));
     assert.match(await page.textContent('#usageChartHint'), /每格 360 分钟/, '切到 7 天后桶宽变成 6 小时');
 
     // 粗桶会把高峰窗口整个包在中间 → 必须标『跨时段』（细桶边界对齐则不会，这也是真账本的行为）
     await page.click('#usageChartControls [data-usage-hours="720"]');
-    await page.waitForFunction(() => /每格 \d+ 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
+    await page.waitForFunction(() => /每格 1440 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
       && document.querySelector('#usageChartControls [data-usage-hours="720"]')?.classList.contains('active'));
     assert.match(await page.textContent('#usageChartHint'), /每格 1440 分钟/, '切到 30 天后桶宽变成 24 小时');
     const coarse = await page.evaluate(() => ({
@@ -496,6 +552,37 @@ try {
     assert.equal(await page.locator('#simPromptText').getAttribute('readonly'), '', '保存后应回到只读');
   });
 
+  if (!original) await test('正文未变但同步已修复时仍提示重启；真正无变化时保持只读', async () => {
+    await navigate('persona');
+    await page.locator('#simPromptEdit').click();
+    await page.route('**/api/preset/sim-prompt', route => route.fulfill({ json: {
+      ok: true, unchanged: true, synced: true, bundleUpdated: true, requiresRestart: true,
+    } }), { times: 1 });
+    await page.locator('#simPromptSave').click();
+    await page.waitForFunction(() => document.getElementById('simPromptMsg').textContent.includes('修复预设同步'));
+    assert.match(await page.locator('#simPromptMsg').textContent(), /重启 DSH/);
+    assert.equal(await page.locator('#simPromptText').getAttribute('readonly'), '');
+    await page.locator('#simPromptEdit').click();
+    await page.locator('#simPromptSave').click();
+    await page.waitForFunction(() => document.getElementById('simPromptMsg').textContent.includes('内容没有变化'));
+    assert.equal(await page.locator('#simPromptText').getAttribute('readonly'), '');
+  });
+
+  if (!original) await test('预设同步失败保留编辑内容，不能显示保存成功', async () => {
+    await navigate('persona');
+    await page.locator('#simPromptEdit').click();
+    const edited = (await page.locator('#simPromptText').inputValue()) + '\n同步失败回归';
+    await page.locator('#simPromptText').fill(edited);
+    await page.route('**/api/preset/sim-prompt', route => route.fulfill({ json: {
+      ok: false, synced: false, error: 'fixture: 预设文件写入失败',
+    } }), { times: 1 });
+    await page.locator('#simPromptSave').click();
+    await page.waitForFunction(() => document.getElementById('simPromptMsg').textContent.includes('写入失败'));
+    assert.equal(await page.locator('#simPromptText').inputValue(), edited);
+    assert.equal(await page.locator('#simPromptText').getAttribute('readonly'), null);
+    await page.locator('#simPromptCancel').click();
+  });
+
   if (!original) await test('仿真提示词可切换到一代/二代，两代内容相互独立', async () => {
     await navigate('persona');
     await page.waitForFunction(() => document.getElementById('simPromptText').value.length > 0);
@@ -509,6 +596,25 @@ try {
     // 切回二代，避免影响后续断言
     await page.locator('#simPromptPreset').selectOption('qq-chat-v2');
     await page.waitForFunction((prev) => document.getElementById('simPromptText').value === prev, v2);
+  });
+
+  if (!original) await test('Canonical simulation prompts save independently of legacy prompts', async () => {
+    await navigate('persona');
+    const legacy = fixture.state.simPrompts['qq-chat-v2'];
+    const other = fixture.state.simPrompts['qsh-sim-v2'];
+    await page.locator('#simPromptPreset').selectOption('qsh-sim');
+    await page.waitForFunction(() => document.getElementById('simPromptStatus').textContent.includes('qsh-sim'));
+    await page.locator('#simPromptEdit').click();
+    const content = (await page.locator('#simPromptText').inputValue()) + '\n独立的规范仿真提示词。';
+    await page.locator('#simPromptText').fill(content);
+    await page.locator('#simPromptSave').click();
+    await page.waitForFunction(() => document.getElementById('simPromptMsg').textContent.includes('重启 DSH'));
+    assert.equal(fixture.state.simPrompts['qsh-sim'], content);
+    assert.equal(fixture.state.simPrompts['qq-chat-v2'], legacy);
+    await page.locator('#simPromptPreset').selectOption('qsh-sim-v2');
+    await page.waitForFunction((expected) => document.getElementById('simPromptText').value === expected, other);
+    await page.locator('#simPromptPreset').selectOption('qq-chat-v2');
+    await page.waitForFunction((expected) => document.getElementById('simPromptText').value === expected, legacy);
   });
 
   if (!original) await test('人格注入上限可调，且随模式筛选后统计', async () => {

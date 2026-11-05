@@ -9,9 +9,6 @@
     "authPrefix": "Bearer",
     "allowRemote": false
   },
-  "role": {
-    "maxInjectChars": 8000
-  },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
@@ -21,10 +18,10 @@
     "launcherPath": "",
     "homeDir": ""
   },
-  "ownerQQ": null,
   "sessionCwd": "",
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
+  "ownerQQ": null,
   "allow": {
     "private": [],
     "groups": []
@@ -34,23 +31,12 @@
     "groups": []
   },
   "allowAllWhenEmpty": false,
-  "ackMessage": "",
+  "ackMessage": "🤔 收到，正在思考…",
   "sendDelayMs": 300,
   "questionTimeoutMs": 300000,
   "consolePort": 3100,
   "consoleToken": "",
-  "pricing": {
-    "models": {
-      "my-relay-model": {
-        "label": "我的中转模型",
-        "off": {
-          "cacheHit": 0.5,
-          "cacheMiss": 3,
-          "output": 9
-        }
-      }
-    }
-  },
+  "pricing": null,
   "security": {
     "interceptNotify": true
   },
@@ -70,6 +56,25 @@
   },
   "social": {
     "enabled": true,
+    "triggerProbability": 0.1,
+    "contextWindow": 20,
+    "activeCheckMinMs": 10000,
+    "activeCheckMaxMs": 30000,
+    "activeReplyDelayMinMs": 2000,
+    "activeReplyDelayMaxMs": 8000,
+    "activeDurationEnabled": true,
+    "activeDurationMinMs": 900000,
+    "activeDurationMaxMs": 1800000,
+    "idleWindowMs": 360000,
+    "idleRetryProbability": 0.25,
+    "idleRetryWaitMs": 120000,
+    "proactiveEnabled": true,
+    "proactiveIdleThresholdMs": 1800000,
+    "proactiveCheckMinMs": 2700000,
+    "proactiveCheckMaxMs": 5400000,
+    "proactiveProbability": 0.2,
+    "skipProbability": 0.15,
+    "surrenderProbability": 0,
     "maxReplyChars": 500,
     "mustReplyKeywords": [
       "deepseek",
@@ -79,31 +84,12 @@
       "d指导",
       "在吗"
     ],
-    "contextWindow": 20,
-    "triggerProbability": 0.1,
-    "activeCheckMinMs": 8000,
-    "activeCheckMaxMs": 30000,
-    "idleWindowMs": 360000,
-    "idleRetryProbability": 0.4,
-    "proactiveEnabled": true,
-    "proactiveIdleThresholdMs": 1800000,
-    "proactiveCheckMinMs": 2700000,
-    "proactiveCheckMaxMs": 5400000,
-    "proactiveProbability": 0.2,
-    "activeReplyDelayMinMs": 1000,
-    "activeReplyDelayMaxMs": 5000,
-    "activeDurationEnabled": true,
-    "activeDurationMinMs": 1200000,
-    "activeDurationMaxMs": 3000000,
-    "skipProbability": 0.05,
-    "surrenderProbability": 0,
-    "idleRetryWaitMs": 120000,
     "burstEnabled": true,
     "burstIntervalMinMs": 1000,
     "burstIntervalMaxMs": 3000,
-    "longGapProbability": 0.2,
-    "longGapMinMs": 5000,
-    "longGapMaxMs": 10000
+    "longGapProbability": 0.1,
+    "longGapMinMs": 2500,
+    "longGapMaxMs": 5000
   },
   "socialV2": {
     "enabled": true,
@@ -146,8 +132,6 @@
       "defaultMode": "diving",
       "preSleepWaitEnabled": true,
       "preSleepWaitMs": 300000,
-      "staleChatMinutes": 10,
-      "staleSilentMinutes": 120,
       "recommendedDefaultInfinite": true,
       "sleepMinMs": 60000,
       "sleepMaxMs": 0,
@@ -181,7 +165,10 @@
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
       "noActionLimit": 3,
-      "maxWakeConfigReminders": 2
+      "maxWakeConfigReminders": 2,
+      "staleChatMinutes": 10,
+      "staleSilentMinutes": 120,
+      "preSleepWaitMinMs": 60000
     },
     "send": {
       "burstEnabled": true,
@@ -197,7 +184,7 @@
       "maxGapMs": 10000,
       "gapBaseMs": 800,
       "gapPerCharMs": 20,
-      "recommendedHint": "单条消息不要用空格断句，中文短句用逗号/顿号或直接连写；分条时每条都要读起来完整，不要把同一句话拆到两条里；普通闲聊建议一次 1~3 条，条间 1~3 秒；讲故事/回忆可以 5~10 秒间隔；不要连续刷屏。"
+      "recommendedHint": "普通闲聊建议一次 1~3 条，条间 1~3 秒；讲故事/回忆可以 5~10 秒间隔；不要连续刷屏。"
     },
     "wait": {
       "defaultMs": 30000,
@@ -218,19 +205,6 @@
         "maxPerHour": 10,
         "maxRemarkChars": 20
       }
-    },
-    "voice": {
-      "enabled": false,
-      "dir": "audio",
-      "maxSeconds": 300,
-      "maxBytes": 20971520,
-      "maxPerMinute": 2,
-      "maxPerHour": 10,
-      "allowAbsolutePath": false,
-      "defaultVolume": 1,
-      "loudness": "normal",
-      "ffmpegPath": "",
-      "autoReadback": true
     },
     "proactive": {
       "enabled": true,
@@ -263,7 +237,23 @@
       "gifFrames": 6,
       "gifTile": 240,
       "normalizeTimeoutMs": 25000
+    },
+    "voice": {
+      "enabled": false,
+      "dir": "audio",
+      "maxSeconds": 300,
+      "maxBytes": 20971520,
+      "maxPerMinute": 2,
+      "maxPerHour": 10,
+      "allowAbsolutePath": false,
+      "defaultVolume": 1,
+      "loudness": "normal",
+      "ffmpegPath": "",
+      "autoReadback": true
     }
+  },
+  "role": {
+    "maxInjectChars": 8000
   },
   "webSearch": {
     "provider": "auto",
