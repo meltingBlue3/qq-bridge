@@ -156,5 +156,11 @@ export function compactModelData(data, opts = {}) {
 }
 
 export function serializeModelData(data, opts = {}) {
-  return JSON.stringify(compactModelData(data, opts));
+  const view = compactModelData(data, opts);
+  if (isRecord(view) && Number.isSafeInteger(view.newUnreadCount)) {
+    // 已展示待确认的消息仍在缓冲中，模型判断新消息时只需要未展示数。
+    delete view.unreadCount;
+    delete view.unreadNote;
+  }
+  return JSON.stringify(view);
 }

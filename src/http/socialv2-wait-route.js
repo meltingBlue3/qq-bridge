@@ -9,7 +9,7 @@
 // 同一会话只允许一个长轮询（租约按归一化 key 记账，过期可接管）。
 
 import { looksLikeUnfinished } from '../v2-wait.js';
-import { countUnseenUnread, unreadCountNote } from '../social-v2/receipts.js';
+import { countUnseenUnread, isShownSeq, unreadCountNote } from '../social-v2/receipts.js';
 import { preSleepWaitWindowMsV2 } from '../social-v2/wake-policy.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,6 +105,21 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     // was reading/thinking after its snapshot, before this HTTP request.
     const requestSeq = st.lastUnreadSeq || 0;
     const baseline = replyWait && (v2ToolEnabled('getUnread') || v2ToolEnabled('getRecent')) ? readThroughSeqV2(st) : requestSeq;
+    // A follow-up can arrive while the model is composing a reply, just before
+    // it calls messages. Count visible, unshown backlog toward the batch size.
+    const pendingAtStart = new Set();
+    if (!replyWait && req.headers['x-agent-token']) {
+      const floor = readThroughSeqV2(st);
+      for (const message of [
+        ...(v2ToolEnabled('getUnread') ? st.unread : []),
+        ...(v2ToolEnabled('getRecent') ? st.recentMessages : []),
+      ]) {
+        if (message && !message.isSelf && message.seq > floor && !isShownSeq(st, message.seq)) {
+          pendingAtStart.add(message.seq);
+        }
+      }
+    }
+    const backlogReady = pendingAtStart.size >= minNew;
     const start = Date.now();
     let arrived = false;
     let lastNewAt = 0;
@@ -132,9 +147,12 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
       // Its timestamp must still invalidate the previous quiet window.
       lastNewAt = incomingAt();
       arrived = (st.lastUnreadSeq || 0) > baseline;
+    } else if (backlogReady) {
+      arrived = true;
+      lastNewAt = Number(st.lastIncomingAt) || start;
     } else while (Date.now() - start < timeoutMs && !aborted) {
       let nowSeq = st.lastUnreadSeq || 0;
-      if (nowSeq - baseline >= minNew) {
+      if (nowSeq - baseline + pendingAtStart.size >= minNew) {
         arrived = true;
         lastNewAt = Date.now();
         // 已等到新消息：继续等到“最后一条新消息之后 quietMs 内不再有新消息”再返回。
@@ -170,14 +188,13 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     // 这次等待「算不算沉睡前观察」：闸门只认单次 timeoutMs ≥ 观察窗口的调用。
     // 实测踩过：模型用 timeoutMs=90000 等了 90 秒，以为完成了观察，结果闸门不认，
     // 只能再补一次 180 秒 —— 白花一轮。所以要在返回里把这件事说破，而不是让它自己悟。
-    const preSleepCountsAsObservation = !replyWait && timeoutMs >= preSleepWaitMs;
+    const preSleepCountsAsObservation = !replyWait && !backlogReady && timeoutMs >= preSleepWaitMs;
     const quiet = (replyWait || (arrived && quietMs > 0)) && (Date.now() - lastNewAt >= quietMs);
     // 判断这次等待是否是“沉睡前观察尝试”：AI 明确请求等满观察窗口（默认 5 分钟）。
     // 只有这种尝试里等到新消息，才会把“已观察并看到新消息”标记下来，允许 AI 看过新消息后直接决定不参与并沉睡。
-    const preSleepAttempt = !replyWait && timeoutMs >= preSleepWaitMs;
     // 只有“没等到新消息且总时长达到观察窗口”或“最后一条新消息之后安静满了观察窗口”才算满足沉睡前等待；
     // 不能因为总时长到了但最后一条消息才刚过 10 秒就误判满足。
-    const preSleepSatisfiedNow = !replyWait && (!arrived
+    const preSleepSatisfiedNow = !replyWait && !backlogReady && (!arrived
       ? waitedMs >= preSleepWaitMs
       : (quiet && (Date.now() - lastNewAt) >= preSleepWaitMs));
     if (preSleepSatisfiedNow) {
@@ -191,7 +208,7 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
       // 等待期间有新消息：
       // - 如果这是一次 5 分钟沉睡前观察尝试，则标记“已观察”，AI 看过 newMessages 后可自行决定是否参与；
       // - 否则只清空累计，不算完成沉睡前观察。
-      if (preSleepAttempt) {
+      if (preSleepCountsAsObservation) {
         st.preSleepWaitObservedAt = Date.now();
       }
       st.preSleepWaitAccumMs = 0;
@@ -204,7 +221,8 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     const history = replyWait
       ? [...(v2ToolEnabled('getUnread') ? st.unread : []),
         ...(v2ToolEnabled('getRecent') ? st.recentMessages : [])]
-      : (Array.isArray(st.recentMessages) ? st.recentMessages : []);
+      : [...(Array.isArray(st.recentMessages) ? st.recentMessages : []),
+        ...(v2ToolEnabled('getUnread') ? st.unread : [])];
     // ── 漏消息窗口（2026-10-18 修）──────────────────────────────────
     //
     // 旧实现按 `seq > baseline` 取"本次等待期间新到的"，而 baseline 对普通等待是
@@ -215,20 +233,18 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
     // 之后每次等待都要多读一次 unread 才能收尾；期间有人 @ 也完全没进本回合。
     //
     // 现在按**已读过水位**取：凡是没有进入 readThroughSeq 的消息，一律补给它。
-    // `arrived` 仍按 requestSeq 判（"有没有新动静"语义不变），所以等待不会变成忙轮询；
-    // 只要这次确实返回了，返回的就是「从水位起连续的一段」，模型据此能正常推进水位。
+    // 请求开始时已展示的消息不计入批量阈值，因此同一批不会反复触发等待返回。
     const watermarkAtRequest = readThroughSeqV2(st);
     const pendingFloor = Math.min(baseline, watermarkAtRequest);
     const fullPending = [...new Map(history
-      .filter((m) => m && !m.isSelf && (m.seq || 0) > pendingFloor)
+      .filter((m) => m && !m.isSelf && (m.seq || 0) > pendingFloor
+        && (!backlogReady || pendingAtStart.has(m.seq)))
       .map((m) => [m.seq, m])).values()].sort((a, b) => a.seq - b.seq);
     // 有上限：一次倒 30 条旧账会把上下文挤爆。**必须从最老的开始取**（连续，
     // 水位才推得动）；被截断时 partial=true，提示模型用 unread 工具续读。
     const waitCap = Math.min(50, Math.max(12, Number(cfg.socialV2?.context?.unreadLimit) || 30));
     const pending = fullPending.length > waitCap ? fullPending.slice(0, waitCap) : fullPending;
     const pendingTruncated = fullPending.length > pending.length;
-    // `arrived` is recomputed against what this request may actually hand over,
-    // so a suppressed buffer cannot report an arrival it is not allowed to show.
     const newMessages = replyWait ? pending : (arrived ? pending : []);
     // newUnreadCount 在登记回执之前取：模型要的是「这次等待前我有几条没见过」。
     const newUnreadCount = countUnseenUnread(st);
@@ -267,9 +283,9 @@ export async function handleWaitRoute({ req, res, url, sendJson, readBody, deps 
       ...(!replyWait ? {
         canSleepNow: !preSleepBlocked,
         countsAsObservation: preSleepCountsAsObservation,
-        hint: preSleepBlocked
+        hint: (backlogReady ? '先处理等待开始前已到达的 newMessages。' : '') + (preSleepBlocked
           ? `还不能收尾：还需约 ${Math.ceil(preSleepRemainingMs / 1000)} 秒没有新消息。要完成沉睡前观察，请用 qq_wait_for_messages(timeoutMs=${preSleepWaitMs}) 一次等满——更短的 timeoutMs 不算观察，满足不了闸门（本次 ${Math.round(timeoutMs)}ms ${preSleepCountsAsObservation ? '达标' : '不达标'}）。`
-          : '现在可以直接收尾：qq_mark_read(throughSeq=已读水位) 或 qq_set_wake_config(throughSeq=已读水位, config=…)。不用再等一轮。'
+          : '现在可以直接收尾：qq_mark_read(throughSeq=已读水位) 或 qq_set_wake_config(throughSeq=已读水位, config=…)。不用再等一轮。')
       } : {}),
       newMessages,
       readThroughSeq,

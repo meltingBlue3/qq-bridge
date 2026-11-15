@@ -258,6 +258,7 @@ await test('combined close respects the separate mark-read and wake-config tool 
 await test('an in-flight wait cannot authorize new messages after its session token is retired', async ({ h, st, request, append }) => {
   await h.ensureSession(KEY);
   append('before wait');
+  await request('unread');
   const oldToken = st.agentToken;
   const waiting = request('wait', { body: { timeoutMs: 1000, quietMs: 0 }, token: oldToken });
   const timer = setTimeout(() => { h.retireSession(KEY); append('arrived after token retirement'); }, 60);
@@ -271,6 +272,7 @@ await test('an in-flight wait cannot authorize new messages after its session to
 
 await test('an in-flight wait cannot write observation into a replaced conversation state', async ({ h, st, request, append }) => {
   append('old state');
+  await request('unread');
   const waiting = request('wait', { body: { timeoutMs: 100, quietMs: 0 } });
   const timer = setTimeout(() => {
     h.socialV2.conversations.delete(KEY);
@@ -287,6 +289,7 @@ await test('an in-flight wait cannot write observation into a replaced conversat
 
 await test('an in-flight wait rechecks mode permission before exposing a new arrival', async ({ h, request, append }) => {
   append('before mode change');
+  await request('unread');
   const waiting = request('wait', { body: { timeoutMs: 1000, quietMs: 0 } });
   const timer = setTimeout(() => { h.setMode('chat'); append('after mode change'); }, 60);
   let result;
@@ -303,6 +306,11 @@ await test('building a budgeted snapshot preserves whole oldest messages without
   assert.deepEqual(seqs(snapshot.messages), [1, 2]);
   assert.equal(snapshot.includedUnreadCount, 2);
   assert.equal(snapshot.unreadCount, 3);
+  assert.equal(snapshot.newUnreadCount, 3);
+  const xml = h.renderWakeSnapshotXml(snapshot);
+  assert.match(xml, /newUnreadCount="3" includedUnreadCount="2"/);
+  assert.doesNotMatch(xml, /\bunreadCount=/);
+  assert.doesNotMatch(h.buildWakePromptV2(KEY, 'replyCheck', snapshot), /未展示的新未读|timeoutMs|newMessages/);
   assert.equal(snapshot.partial, true);
   assert.equal(snapshot.readThroughSeq, 2);
   assert.ok(JSON.stringify(snapshot).length <= h.cfg.socialV2.context.wakeMaxChars);
@@ -312,6 +320,7 @@ await test('building a budgeted snapshot preserves whole oldest messages without
 
 await test('an in-flight wait rechecks paused, feature, tool and allowlist permissions without granting observation', async ({ h, st, request, append }) => {
   append('unread before policy changes');
+  await request('unread');
   const cases = [
     ['pause', () => { h.socialV2.paused = true; }, () => { h.socialV2.paused = false; }],
     ['feature disable', () => { h.cfg.socialV2.enabled = false; }, () => { h.cfg.socialV2.enabled = true; }],
@@ -349,16 +358,19 @@ await test('oversized first stored unread remains intact and cannot be skipped b
   assert.deepEqual(unread.data.messages[0], storedBefore);
 });
 
-await test('snapshot recent history stays chronological and does not duplicate unread', async ({ h, request, append }) => {
+await test('model recent history excludes self before limiting and stays chronological', async ({ h, st, request, append }) => {
   append('history 1'); append('history 2'); append('history 3');
   await request('mark-read', { body: {} });
   append('current unread');
+  st.recentMessages.push({ ...st.recentMessages.at(-1), seq: 5, isSelf: true, text: 'bot text' });
   h.cfg.socialV2.context.wakeRecentLimit = 2;
   const snapshot = h.buildWakeSnapshotV2(KEY);
   assert.deepEqual(seqs(snapshot.messages), [4]);
   assert.deepEqual(seqs(snapshot.recent), [2, 3]);
   assert.equal(snapshot.partial, false);
   assert.equal(snapshot.readThroughSeq, 4);
+  const recent = await request('recent');
+  assert.deepEqual(seqs(recent.data.messages), [1, 2, 3]);
 });
 
 await test('snapshot feature and tool flags cannot be bypassed through inline recent history', async ({ h, request, append }) => {

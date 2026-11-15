@@ -5008,10 +5008,12 @@ async function main() {
       // offline queue may have received more messages since this wake was queued.
       wakeState = getSocialV2State(key);
       wakeToken = wakeState.agentToken;
-      promptText = buildWakePromptV2(key, opts.wakeReason);
       wakeSnapshot = buildWakeSnapshotV2(key);
+      promptText = buildWakePromptV2(key, opts.wakeReason, wakeSnapshot);
       if (wakeSnapshot) {
-        promptText += `\n\n【本次消息快照】\n${renderWakeSnapshotXml(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
+        const continuation = wakeSnapshot.partial && v2ToolEnabled('getUnread')
+          ? '还有未展示的新消息，用 qq_get_unread_messages(afterSeq=readThroughSeq) 补读。' : '';
+        promptText += `\n\n【本次消息快照】\n${renderWakeSnapshotXml(wakeSnapshot)}\n先处理快照中的消息。${continuation}收尾用已处理结果的 readThroughSeq 作为 throughSeq。`;
       }
     }
     let content = [{ type: 'text', text: withSlangContext(promptText, key) }];
@@ -6159,9 +6161,8 @@ async function main() {
       now: localClockText(now),
       ...(newestAgo ? { newestAgo } : {}),
       unreadCount: st.unread.length,
-      // 会话方反馈③：unreadCount 是缓冲总量（含已展示、等 mark_read 确认的），
-      // newUnreadCount 才是模型真正没见过的——两个数都给，避免「9 条其实就 1 条新」的困惑。
-      newUnreadCount: countUnseenUnread(st),
+      // 内部保留缓冲总量，模型快照只显示未展示总数和本次附带条数。
+      newUnreadCount: pendingUnread.length,
       includedUnreadCount: 0,
       readThroughSeq: readThroughSeqV2(st),
       partial: pendingUnread.length > 0
@@ -6188,6 +6189,7 @@ async function main() {
       // 上一回合已展示过的 recent 不再重复下发（回执见 social-v2/receipts.js）；
       // 仍在未读里的也不放 recent（未读有自己的展示面），只补更早的上下文。
       const recent = st.recentMessages.filter((m) => {
+        if (m.isSelf) return false;
         if (!Number.isSafeInteger(m.seq)) return true;
         if (unread.has(m.seq)) return false;
         return !isShownSeq(st, m.seq);
@@ -6222,8 +6224,8 @@ async function main() {
     }
     const meta = [
       `now="${snapshot.now ?? ''}"`,
-      `unreadCount="${snapshot.unreadCount ?? 0}"`,
       `newUnreadCount="${snapshot.newUnreadCount ?? 0}"`,
+      `includedUnreadCount="${snapshot.includedUnreadCount ?? 0}"`,
       `readThroughSeq="${snapshot.readThroughSeq ?? 0}"`,
       `partial="${snapshot.partial ? 'true' : 'false'}"`,
     ].join(' ');
@@ -6256,7 +6258,9 @@ async function main() {
     return `【你的身份】你在 QQ 上的昵称是${label}${idText}。${callBits}；群名片可能与昵称不同，at/引用段里带${id ? ` ${id} ` : '你的 QQ 号'}就是在叫你。\n\n`;
   }
 
-  function buildWakePromptV2(key, reason) {
+  const preSleepWakeHint = '决定潜水时，按系统提示完成沉睡前观察。';
+
+  function buildWakePromptV2(key, reason, snapshot = null) {
     const st = getSocialV2State(key);
     // 角色/身份/令牌/反AI味/积极性/表情策略/首回复节奏/时间感规则/沉睡前观察规则
     // 已全部迁到 system prompt（persona 载荷 + L1 preset 前缀），见 syncPersonaForSession。
@@ -6275,18 +6279,14 @@ async function main() {
       : '';
     const lastMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf);
     const lastAiMin = st.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(st.lastAiReplyAt)) / 60000)) : null;
-    const unreadTotal = (st.unread || []).length;
-    const unseenUnread = countUnseenUnread(st);
-    // 两个口径并存：缓冲总量 vs 没看过的。相同时只写一个数，避免啰嗦。
-    const unreadBit = unseenUnread >= unreadTotal ? `未读 ${unreadTotal} 条` : `未读 ${unreadTotal} 条（新 ${unseenUnread}，其余已展示过、mark_read 即可确认）`;
-    const statusBits = [unreadBit];
+    const statusBits = snapshot ? [] : [`未展示的新未读 ${countUnseenUnread(st)} 条`];
     if (lastMsg) {
       const lastAgo = describeAge(lastMsg.time, Date.now());
       statusBits.push(`最近一条来自 ${String(lastMsg.sender || '未知')}${lastAgo ? `（${lastAgo} 前）` : ''}：${String(lastMsg.text || lastMsg.plain || '').slice(0, 30)}`);
     }
     if (lastMsg && looksLikeUnfinished(String(lastMsg.tail || lastMsg.plain || lastMsg.text || ''))) statusBits.push('对方可能没说完');
     if (lastAiMin != null) statusBits.push(`你上次发言 ${lastAiMin} 分钟前`);
-    const statusLine = `【此刻状态】${statusBits.join('；')}\n\n`;
+    const statusLine = statusBits.length ? `【此刻状态】${statusBits.join('；')}\n\n` : '';
     const wc = st.wakeConfig || {};
     const wcTr = wc.triggers || {};
     const wcMode = wc.mode === 'active' ? '活跃' : '潜水';
@@ -6321,7 +6321,7 @@ async function main() {
       return `${base}【唤醒】${key}\n原因：你设置的有限潜水时间已到；在你规定的时间内没有任何一项条件被触发，只是因为时间到了所以你被唤醒。\n你可以查看消息，或继续设置新的唤醒条件。`;
     }
     if (reason === 'replyCheck') {
-      return `${base}【回复检查】${key}\n原因：你刚刚发送过消息，现在回来检查是否有人回复。\n已有回复时先看消息，需要短静默就用 qq_wait_for_messages(purpose="reply") 判断对方是否说完；如果没人回你，不用硬补一句，但也不要立刻潜水——先完成一次沉睡前观察再收尾（规则见系统提示，timeoutMs 用等待返回里的 hint）：没人说话可收尾；有人说话则查看 newMessages，不需要你参与也可直接收尾（qq_mark_read 或 qq_set_wake_config）。`;
+      return `${base}【回复检查】${key}\n先看有无回复，需要短静默时用 qq_wait_for_messages(purpose="reply")。${preSleepWakeHint}`;
     }
     if (reason === 'proactiveCheck') {
       return `${base}【主动机会】${key}\n原因：群里已经安静了一段时间，这是一次你可以主动冒泡的机会。\n优先主动开个话题、追问上次没聊完的事、分享一个刚想到的想法；如果一时想不到，可以用 mcp__web-search-safe__web_search 搜一下当前热点/时事/网络热梗，再结合记忆里的群友兴趣挑一个自然角度。只要内容自然，就大胆开口；如果实在没话想说，再安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
@@ -6329,13 +6329,13 @@ async function main() {
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
-    return `${base}【唤醒】${key}\n原因：${reason}${triggeredLine}\n【行动前】先判断：群里在聊什么？热闹还是冷清？有没有人直接找你？对方说完了吗？你有没有真正想说的？\n如果群聊正热但没人叫你，可以插一句有趣的/相关的，插不上再看情况潜水；不要一上来就划走。\n你可以调用工具查看未读消息、人设、状态，自行决定是否发言；决定潜水前先按系统规则完成沉睡前观察（引用/寻址规则同样在系统提示里）。`;
+    return `${base}【唤醒】${key}\n原因：${reason}${triggeredLine}\n【行动前】先判断对方是否说完，再决定要不要接话（引用/寻址规则同样在系统提示里）。需要短静默时用 qq_wait_for_messages(purpose="reply")。${preSleepWakeHint}`;
   }
 
   function buildWakeReminderPromptV2(key) {
     // 角色/身份/令牌已随 persona 载荷进 system（每次投递前同步），提醒只带动态指令。
     void key;
-    return '【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先完成沉睡前观察（timeoutMs 用等待返回里的 hint 给的值）；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。';
+    return `【提醒】用 qq_set_wake_config 设置下次唤醒，或用 qq_mark_read 确认已处理的消息。${preSleepWakeHint}`;
   }
 
   const drainPromptQueue = (key, errorMsg) => {

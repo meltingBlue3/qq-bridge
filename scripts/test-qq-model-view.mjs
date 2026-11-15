@@ -9,6 +9,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { compactModelMessage, compactModelData, serializeModelData, sanitizeUntrustedText } from '../src/qq-model-view.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+test('MCP shows unseen count without the acknowledgement backlog count', () => {
+  const response = { unreadCount: 9, newUnreadCount: 1, unreadNote: 'already shown', messages: [] };
+  assert.deepEqual(JSON.parse(serializeModelData(response)), { newUnreadCount: 1, messages: [] });
+  assert.equal(response.unreadCount, 9);
+  assert.equal(JSON.parse(serializeModelData({ unreadCount: 9 })).unreadCount, 9);
+});
 const shortMessage = {
   seq: 21, messageId: '-2026', sender: '小明', userId: '10001',
   text: '刚刚那个梗笑死我了', plain: '刚刚那个梗笑死我了', tail: '刚刚那个梗笑死我了',

@@ -78,7 +78,7 @@ await test('思考期间到达的消息不再漏：等待返回从水位起连�
     append('思考期间来的A'); append('思考期间来的B');
 
     // 模型开始等待，等待期间再来一句（seq 5）才触发 arrived
-    const waiting = request('wait', { body: { purpose: 'messages', timeoutMs: 800, quietMs: 0, minNewMessages: 1 } });
+    const waiting = request('wait', { body: { purpose: 'messages', timeoutMs: 800, quietMs: 0, minNewMessages: 3 } });
     await sleep(60);
     append('等待期间来的C');
     const result = await waiting;
@@ -96,6 +96,24 @@ await test('思考期间到达的消息不再漏：等待返回从水位起连�
   });
 });
 
+await test('普通等待立即交还开始前已到但未展示的追问，且不授予观察资格', async () => {
+  await withBridge(async ({ request, append }) => {
+    append('已展示的首条');
+    await request('unread');
+    append('开始等待前到达的追问');
+    const result = await request('wait', { body: { purpose: 'messages', timeoutMs: 500, quietMs: 0 } });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.arrived, true);
+    assert.deepEqual(seqs(result.data.newMessages), [2]);
+    assert.equal(result.data.readThroughSeq, 2);
+    assert.equal(result.data.preSleepWaitObserved, false);
+    assert.equal(result.data.countsAsObservation, false);
+    assert.equal(result.data.canSleepNow, false);
+    const next = await request('wait', { body: { purpose: 'messages', timeoutMs: 100, quietMs: 0 } });
+    assert.equal(next.data.arrived, false, '下一次等待不能重复返回已展示的追问');
+  }, { wake: { preSleepWaitEnabled: true, preSleepWaitMs: 500 } });
+});
+
 // ── 2. 就是那个卡死场景：水位不能因为一条缝而永久停住 ──────────────────────
 await test('反复出现「思考期间到达」也不会把水位钉死', async () => {
   await withBridge(async ({ h, request, append, sleep }) => {
@@ -104,7 +122,7 @@ await test('反复出现「思考期间到达」也不会把水位钉死', async
     assert.equal(lastThrough, 1);
     for (let round = 1; round <= 3; round += 1) {
       append(`思考期-${round}`);
-      const waiting = request('wait', { body: { purpose: 'messages', timeoutMs: 800, quietMs: 0, minNewMessages: 1 } });
+      const waiting = request('wait', { body: { purpose: 'messages', timeoutMs: 800, quietMs: 0, minNewMessages: 2 } });
       await sleep(50);
       append(`等待期-${round}`);
       const result = await waiting;

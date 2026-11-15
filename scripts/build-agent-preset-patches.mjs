@@ -42,7 +42,8 @@ export function buildPatches({ check = false, log = () => {} } = {}) {
   for (const name of PRESETS) {
     const file = patchFileFor(name);
     const content = renderPatch(name);
-    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    // 比对归一化 EOL：autocrlf 的 fresh checkout 会把产物写成 CRLF，不算漂移。
+    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : null;
     const changed = current !== content;
     if (changed && !check) {
       fs.mkdirSync(path.dirname(file), { recursive: true });

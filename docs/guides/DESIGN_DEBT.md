@@ -207,3 +207,21 @@ QQ 侧长期使用者反馈 5 个问题，逐项修复（每项独立提交 + �
   - notify 后台提醒与收尾提醒同步瘦身；令牌轮换经 persona 重写自然跟随。
   - **部署顺序**：桥接重启即全部生效（persona 走热加载；被删规则在已加载的 L1 里
     本来就有）。L1 仅有一处措辞更新（「五分钟」→「沉睡前观察」），下次重启 DSH 时顺带生效。
+
+### 第三轮口径收敛（2026-11-15）
+
+第二轮方向（稳定规则进 system、数据留用户消息、口径单一）的续作，一次收尾提交：
+
+- **模型视图单口径**：`serializeModelData` 对带 `newUnreadCount` 的响应剥离
+  `unreadCount`/`unreadNote`——缓冲总量与口径解释只进控制台；模型判断「有没有新东西」
+  只剩一个数（N1 终点：不解释，直接不展示）。
+- **等待积压即就绪**：普通 messages 等待开始前已到但未展示的消息计入 `minNewMessages`，
+  满足即立即交还这批（`pendingAtStart`），不再干等 timeout；这批返回**不授予**沉睡前
+  观察资格（`canSleepNow=false`，hint 前置「先处理开始前已到达的 newMessages」）。
+- **自消息出模型视图**：快照 recent 与 HTTP recent 的 agent 视角过滤 `isSelf`。
+- **唤醒文案继续瘦身**：快照存在时状态行不再重复未读数；快照 XML meta 去 `unreadCount=`、
+  加 `includedUnreadCount=`；快照后指令块、唤醒原因、收尾提醒与五个 MCP 工具描述全部
+  短句化（教学细节留在 system prompt / L1）。
+- **防漂移校验 EOL 加固**：patch 产物钉 LF（`.gitattributes`）+ `buildPatches` 比对归一化
+  CRLF——autocrlf 的 fresh checkout 不再误报「产物与源漂移」。
+

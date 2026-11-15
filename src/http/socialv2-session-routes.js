@@ -255,7 +255,7 @@ export async function handleSocialV2SessionRoutes({ req, url, sendJson, readBody
       : null;
     // 控制台视角不参与去重：控制台要的是完整历史，不是去重后的增量。
     const visible = isAgent
-      ? filterUnshownRecent(st, st.recentMessages, { hideUnreadSeqs })
+      ? filterUnshownRecent(st, st.recentMessages.filter((message) => !message.isSelf), { hideUnreadSeqs })
       : { messages: st.recentMessages, excludedShown: 0, excludedUnread: 0 };
     const start = Math.max(0, visible.messages.length - offset - limit);
     const end = Math.max(0, visible.messages.length - offset);
