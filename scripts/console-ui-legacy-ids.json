@@ -206,10 +206,7 @@
   "secInterceptNotify",
   "secSave",
   "secMsg",
-  "consoleTokenInput",
-  "consoleTokenSave",
-  "consoleTokenRandom",
-  "consoleTokenMsg",
+
   "tsKind",
   "tsId",
   "tsMsg",

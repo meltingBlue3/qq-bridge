@@ -19,7 +19,7 @@ async function withServer(h, run) {
 function call(port, pathname, token, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: pathname, method: body ? 'POST' : 'GET',
-      headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': token,
+      headers: { 'x-agent-token': token,
         'x-agent-call': '1', 'content-type': 'application/json' } }, (res) => {
       res.resume(); res.on('end', () => resolve(res.statusCode));
     });

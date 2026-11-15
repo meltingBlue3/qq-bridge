@@ -38,7 +38,7 @@ const defaults = {
   "sendDelayMs": 300,
   "questionTimeoutMs": 300000,
   "consolePort": 3100,
-  "consoleToken": "",
+
   "pricing": null,
   "security": {
     "interceptNotify": true

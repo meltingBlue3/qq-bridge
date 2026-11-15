@@ -30,7 +30,7 @@ import { sanitizeStickerText } from '../src/sticker-lib.js';
 import { createTokenLedger } from '../src/token-ledger.js';
 import { DEFAULT_PRICE_TABLE } from '../src/model-prices.js';
 
-const CONSOLE = { 'x-console-token': 'fixture-console-token' };
+const CONSOLE = {};
 let failures = 0;
 
 async function test(name, run) {

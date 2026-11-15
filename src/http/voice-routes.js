@@ -31,7 +31,7 @@ export async function handleVoiceRoutes({ req, url, sendJson, readBody, deps }) 
     appendActivity
   } = deps;
 
-  // ── 语音发送（操作者通道：CLI / 控制台，凭 consoleToken） ──────────────
+  // ── 语音发送（操作者通道：CLI / 控制台） ──────────────
   //
   // 与 /api/send/* 的 agent 通道分开：操作者可能不在任何 QQ 会话里，
   // 所以不套「会话/模式」闸门，但白名单 + 语音限流 + 文件名审计一个都不少。

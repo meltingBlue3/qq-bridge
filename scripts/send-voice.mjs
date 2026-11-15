@@ -66,20 +66,11 @@ const cfg = loadConfig();
 const httpUrl = String(val('snowluma', cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000')).replace(/\/+$/, '');
 const accessToken = String(val('token', cfg.snowluma?.accessToken || ''));
 const consolePort = Number(val('console-port', cfg.consolePort)) || 3100;
-const consoleToken = String(
-  val('console-token', cfg.consoleToken || process.env.QQ_CONSOLE_TOKEN || readConsoleTokenFile() || '')
-).trim();
+
 const voiceDir = path.resolve(val('voice-dir', cfg.voice?.dir ? path.resolve(ROOT, cfg.voice.dir) : path.join(ROOT, 'audio')));
 const revealToken = has('reveal-token');
 const quiet = has('q') || has('quiet');
 
-function readConsoleTokenFile() {
-  try {
-    return fs.readFileSync(path.join(ROOT, 'state', 'console-token'), 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
 
 const maskToken = (t) => (t ? `${t.slice(0, 4)}…${t.slice(-4)}（${t.length} 字符）` : '(未配置)');
 const out = (...a) => { if (!quiet) console.log(...a); };
@@ -110,7 +101,6 @@ async function onebot(action, params = {}, { timeoutMs = 15000 } = {}) {
 async function bridgeApi(pathname, init = {}) {
   const headers = {
     'content-type': 'application/json',
-    ...(consoleToken ? { 'x-console-token': consoleToken } : {}),
     ...(init.headers ?? {})
   };
   const res = await fetch(`http://127.0.0.1:${consolePort}${pathname}`, {
@@ -271,7 +261,7 @@ async function cmdStatus() {
   console.log(`  snowluma.httpUrl   = ${httpUrl}`);
   console.log(`  snowluma.accessToken = ${revealToken ? accessToken : maskToken(accessToken)}`);
   console.log(`  桥接控制台         = http://127.0.0.1:${consolePort}`);
-  console.log(`  consoleToken       = ${revealToken ? consoleToken : maskToken(consoleToken)}`);
+
   console.log(`  语音库目录         = ${voiceDir}`);
   try {
     const login = await onebot('get_login_info');

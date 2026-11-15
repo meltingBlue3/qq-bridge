@@ -10,14 +10,13 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-security-routes-'));
   const stateDir = path.join(root, 'state');
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ security: { interceptNotify: true }, consoleToken: '' }), 'utf8');
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ security: { interceptNotify: true } }), 'utf8');
   return { root, stateDir };
 }
 
 function harness(root, stateDir) {
-  const cfg = { security: { interceptNotify: true }, consoleToken: '' };
+  const cfg = { security: { interceptNotify: true } };
   let hardened = true;
-  let consoleToken = 'auto-generated-token-0123456789';
   const sent = [];
   let body = {};
   const deps = {
@@ -26,8 +25,6 @@ function harness(root, stateDir) {
     getStateDirHardened: () => hardened,
     setStateDirHardened: (v) => { hardened = v; },
     hardenStateDirAcl: () => { hardened = true; },
-    getConsoleToken: () => consoleToken,
-    setConsoleToken: (v) => { consoleToken = v; },
     root,
     log: () => {}
   };
@@ -41,7 +38,7 @@ function harness(root, stateDir) {
     });
     return { handled, last: sent.at(-1) };
   };
-  return { call, cfg, isHardened: () => hardened, getToken: () => consoleToken };
+  return { call, cfg, isHardened: () => hardened };
 }
 
 test('GET /api/security 返回安全设置与 stateDir ACL 状态', async () => {
@@ -76,34 +73,6 @@ test('POST /api/security rehardenStateDir 会重跑 ACL 收紧', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('POST /api/console/token 手动令牌写入 config，随机令牌写入 state', async () => {
-  const { root, stateDir } = fixture();
-  const h = harness(root, stateDir);
-  const manual = await h.call('POST', '/api/console/token', { token: 'my-manual-token-abcdef' });
-  assert.equal(manual.last.obj.ok, true);
-  assert.equal(manual.last.obj.generated, false);
-  assert.equal(h.getToken(), 'my-manual-token-abcdef');
-  const file = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
-  assert.equal(file.consoleToken, 'my-manual-token-abcdef');
-  assert.equal(fs.readFileSync(path.join(stateDir, 'console-token'), 'utf8'), 'my-manual-token-abcdef');
-
-  const random = await h.call('POST', '/api/console/token', {});
-  assert.equal(random.last.obj.ok, true);
-  assert.equal(random.last.obj.generated, true);
-  assert.ok(h.getToken().length >= 32);
-  const file2 = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
-  assert.equal(file2.consoleToken, '');
-  fs.rmSync(root, { recursive: true, force: true });
-});
-
-test('令牌校验：过短/过长/非法字符都被拒绝', async () => {
-  const { root, stateDir } = fixture();
-  const h = harness(root, stateDir);
-  assert.equal((await h.call('POST', '/api/console/token', { token: 'short' })).last.status, 400);
-  assert.equal((await h.call('POST', '/api/console/token', { token: 'x'.repeat(129) })).last.status, 400);
-  assert.equal((await h.call('POST', '/api/console/token', { token: 'has space token!!' })).last.status, 400);
-  fs.rmSync(root, { recursive: true, force: true });
-});
 
 test('非本组路由返回 false', async () => {
   const { root, stateDir } = fixture();

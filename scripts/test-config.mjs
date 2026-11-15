@@ -95,7 +95,7 @@ test('示例配置与空配置的有效默认值一致，不含真实凭据或�
   const example = JSON.parse(fs.readFileSync(new URL('../config.example.json', import.meta.url), 'utf8'));
   assert.deepEqual(load(example).cfg, load({}).cfg);
   assert.equal(example.dsh.authToken, '');
-  assert.equal(example.consoleToken, '');
+  assert.ok(!('consoleToken' in example), 'consoleToken 已随免密钥移除');
   assert.equal(example.snowluma.accessToken, '');
   assert.equal(example.webSearch.apiKey, '');
   assert.equal(example.allowAllWhenEmpty, false);

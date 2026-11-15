@@ -280,7 +280,7 @@ test('真实控制台 HTTP 入口接入 bundle 同步与状态检查', async () 
   try {
     if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
     const url = `http://127.0.0.1:${server.address().port}/api/preset/sim-prompt`;
-    const headers = { 'content-type': 'application/json', 'x-console-token': 'fixture-console-token' };
+    const headers = { 'content-type': 'application/json' };
     const content = `${realPrefix('qq-chat-v2')}\nHTTP 同步测试。`;
     const saved = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ content }) });
     assert.equal(saved.status, 200);

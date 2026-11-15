@@ -59,11 +59,10 @@
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
 | 只监听回环 | `server.listen(port, '127.0.0.1')` | 永不绑 `0.0.0.0` |
-| 令牌门（可选化，2026-11-16） | 请求最前面 | 带 `x-console-token` / `?token=` 必须精确匹配（错令牌一律 401）；**不带则放行**——会话方要求免输密钥，跨站/劫持防护由 Host 白名单、JSON-only+Origin 写防护与跨站 GET 不可读兜底；未配置时启动仍自动生成 192 bit 随机值，令牌继续作为语音 CLI / MCP 的显式凭据 |
-| 定长比较 | `crypto.timingSafeEqual` | 比较前先比长度，避免 `!==` 短路带来的时延侧信道 |
+| 无令牌（2026-11-16 彻底移除） | 请求最前面 | 控制台 API 不再有独立访问令牌（会话方要求免输密钥）；跨站/劫持防护由 Host 白名单、JSON-only+Origin 写防护与跨站 GET 不可读兜底。会话级边界仍由 agent 令牌隔离承担 |
 | Host 校验 | 请求最前面 | Host 必须是 `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`，否则 403（DNS rebinding 硬化） |
 | CSRF | 非 GET 请求 | 必须 `content-type: application/json`；若带 `Origin`，其 host 必须等于本机 |
-| agent 令牌隔离 | 请求前缀白名单 | 带 `x-agent-token` 的请求默认拒绝，仅放行 `/api/status`、`/api/socialV2/*`、`/api/send/*`、`/api/images/*`、`/api/authorize/read`；管理端点（人格/提示词/思考强度/白名单/重启/令牌）一律 403 |
+| agent 令牌隔离 | 请求前缀白名单 | 带 `x-agent-token` 的请求默认拒绝，仅放行 `/api/status`、`/api/socialV2/*`、`/api/send/*`、`/api/images/*`、`/api/authorize/read`；管理端点（人格/提示词/思考强度/白名单/重启）一律 403 |
 | 空令牌拒绝 | `x-agent-token === ''` | 一律 403，避免"空 = 管理端"的绕过 |
 | 写操作不挂 GET | 全路由审查 | 会触发副作用的接口（表情强制同步、语音同步）一律 POST；GET 只读 |
 | 请求体限制 | `readBody()` | 声明长度或实际累计超过 1 MB → 413；30 秒读取超时 |
@@ -77,7 +76,7 @@
 | 状态只读降级 | `json-store.js` 与领域存储模块 | 文件缺失可创建；空文件、解析/结构/读取错误不当作空库覆盖。外部原文变化后拒绝旧内存保存，写失败可重试；属于乐观检测，不替代单实例锁。损坏角色状态按静默处理。说明见 [CONFIG_AND_STATE.md](CONFIG_AND_STATE.md) |
 | 仿真提示词同步 | `preset-patches.js` + `http/preset-routes.js` | 保存/还原按唯一生成规则更新实际 bundle；写失败返回 `synced:false` 并回滚已完成的源文件写入，回滚失败明确提示检查备份。逐文件原子替换不等于跨文件崩溃事务；恢复后原样保存可修复过期产物。同步状态按内容比较，不证明运行中的 DSH 已加载 |
 | Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
-| 令牌不回显 | 日志/活动/工具日志 | 控制台令牌只打前 6 位；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
+| 令牌不回显 | 日志/活动/工具日志 | SnowLuma/会话令牌只打前几位；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
 | 原型污染 | 记忆写入/加载 | `__proto__` / `constructor` / `prototype` 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter） |
@@ -106,8 +105,8 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 
 > ⛔ **绝不要用 `/inheritance:e` 去"修好" `state/` 的沙箱写入**：恢复继承会把父目录的
 > 可继承 ACE 一起带回来，其中包含 `NT AUTHORITY\Authenticated Users: Modify` 与
-> `BUILTIN\Users: ReadAndExecute` —— 那正是收紧时要摘掉的两条，等于把控制台令牌、
-> SnowLuma OneBot 令牌与全部 QQ 聊天记录重新开放给本机任何已登录用户。
+> `BUILTIN\Users: ReadAndExecute` —— 那正是收紧时要摘掉的两条，等于把 SnowLuma OneBot
+> 令牌与全部 QQ 聊天记录重新开放给本机任何已登录用户。
 
 > ⚠️ 已知的**非预期**收紧（2026-09-29 实测）：`plugins/qq-agent-presets/**` 与
 > `plugins/qq-mode-console/**` 的内容也被切断了继承（`plugins/` 自身没有）。
@@ -141,7 +140,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 | R6 | **预设不变量检查是子串存在性** | 防误删，不防恶意 | 能改这个文件的人本来就是管理员，真正的硬边界在工具守卫与白名单 |
 | R7 | **`self-test.js` 只证明链路通** | 不做断言 | 它是连通性探针，不是回归套件（回归在 `npm run test:audit`） |
 | R8 | **单人维护、无外部安全审计** | 有离线回归 + 本文档 | 计划在 QSH v1.0 发布前做一次外部/对抗式复审 |
-| R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。QSH M2 会用口令派生 + HttpOnly Cookie 把最敏感的控制台凭据从明文落盘里拿掉 |
+| R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。QSH M2 会用口令派生 + HttpOnly Cookie 把最敏感的凭据从明文落盘里拿掉 |
 | R10 | **收紧 `state/` 后，DSH 沙箱会话写不进 `state/`**（见 §2.6） | 有意取舍，非缺陷；诊断见 `npm run diagnose:acl` | 两者不可兼得：能力 SID 只能靠继承下发，而切断继承正是防"本机其他用户读令牌"的唯一手段。**代价已被接受并写进文档**，项目自己的测试夹具/探针据此改用系统临时目录 |
 | R11 | **`plugins/**` 内容被意外切断继承，沙箱里改不动 L7 守卫** | 来源不明（本仓库无此脚本）；`npm run diagnose:acl` 会列出并打印恢复命令 | 该处不含凭据，恢复继承无泄密风险；但若不恢复，被沙箱约束的 DSH agent 就无法维护工具守卫 —— 需要人工在无沙箱终端改 |
 
@@ -164,7 +163,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；模式切换会退役旧会话。DSH preset 清单不可用时，模式、owner、白名单/黑名单变化仍立即撤销旧映射、轮换 token 并清理唤醒定时器；清单故障本身不会退役权限未变的会话（`test-policy-revocation.mjs`）
 - [x] 预设清单不可用时**拒绝**建群聊会话（不回退到默认预设）
 - [x] agent token 无法访问任何管理端点；空 agent token 被拒
-- [x] 控制台伪造 `Host` 被拒；错令牌（含错长度、大小写、尾空格）被拒；无令牌回环放行，跨站 Origin 写请求仍被拒
+- [x] 控制台伪造 `Host` 被拒；无令牌回环读/写放行，跨站 Origin 写请求仍被拒
 - [x] `/api/authorize/read` 空令牌被拒
 - [x] agent 令牌只能读自己会话；跨会话读返回 403
 - [x] 语音只能取语音库内的文件（含 `allowAbsolutePath=true` 与相对穿越两种情形）

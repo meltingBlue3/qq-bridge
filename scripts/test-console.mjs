@@ -7,19 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const BASE = 'http://127.0.0.1:3100';
 
-function readConsoleToken() {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-    if (cfg.consoleToken) return String(cfg.consoleToken);
-  } catch {}
-  try {
-    return fs.readFileSync(path.join(ROOT, 'state', 'console-token'), 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-const TOKEN = readConsoleToken();
-const authHeaders = TOKEN ? { 'x-console-token': TOKEN } : {};
+// 控制台令牌已移除（2026-11-16）：直连本机端口，无需鉴权头。
+const authHeaders = {};
 const api = async (path, method, body) => {
   const headers = { ...authHeaders, ...(body ? { 'content-type': 'application/json' } : {}) };
   const res = await fetch(BASE + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });

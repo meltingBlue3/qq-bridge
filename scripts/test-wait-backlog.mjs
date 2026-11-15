@@ -30,7 +30,7 @@ async function withBridge(run, config = {}) {
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
   const request = (route, { body, token = st.agentToken, key = KEY, query = '' } = {}) => new Promise((resolve, reject) => {
-    const headers = { 'x-console-token': 'fixture-console-token' };
+    const headers = {};
     if (token) headers['x-agent-token'] = token;
     if (body !== undefined) headers['content-type'] = 'application/json';
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port,

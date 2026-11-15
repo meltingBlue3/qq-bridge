@@ -23,7 +23,7 @@ async function test(name, run) {
   catch (error) { failures++; console.error('FAIL', name, '—', error?.stack ?? error); }
 }
 
-const ADMIN = { 'x-console-token': 'fixture-console-token' };
+const ADMIN = {};
 
 function call(port, pathname, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {

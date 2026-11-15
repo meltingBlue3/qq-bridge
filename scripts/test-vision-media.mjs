@@ -48,11 +48,9 @@ try {
 }
 
 // 3. 桥接端点（可选）
-const consoleTokenFile = path.join(ROOT, 'state', 'console-token');
 const socialV2File = path.join(ROOT, 'state', 'social-v2.json');
-if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
+if (fs.existsSync(socialV2File)) {
   try {
-    const consoleToken = fs.readFileSync(consoleTokenFile, 'utf8').trim();
     const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
     const conv = social?.conversations ? Object.entries(social.conversations)[0] : null;
     if (conv) {
@@ -61,7 +59,7 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
       const messageId = st?.recentMessages?.find((m) => m && !m.isSelf)?.messageId || st?.recentMessages?.[0]?.messageId;
       if (agentToken && messageId) {
         const url = `http://127.0.0.1:${config.consolePort || 3100}/api/images/message?key=${encodeURIComponent(key)}&messageId=${encodeURIComponent(String(messageId))}`;
-        const res = await fetch(url, { headers: { 'x-agent-token': agentToken, 'x-console-token': consoleToken }, signal: AbortSignal.timeout(10000) });
+        const res = await fetch(url, { headers: { 'x-agent-token': agentToken }, signal: AbortSignal.timeout(10000) });
         const body = await res.json().catch(() => ({}));
         check('桥接 /api/images/message 端点可访问', res.ok === true && body.ok === true, `HTTP ${res.status}`);
       } else {
@@ -72,7 +70,7 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
     console.log(`⚠️ 桥接端点检查跳过：${error?.message ?? error}`);
   }
 } else {
-  console.log('⚠️ 跳过桥接端点检查：缺少 state/console-token 或 state/social-v2.json');
+  console.log('⚠️ 跳过桥接端点检查：缺少 state/social-v2.json');
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`);

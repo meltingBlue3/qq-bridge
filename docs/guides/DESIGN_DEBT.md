@@ -237,3 +237,18 @@ QQ 侧长期使用者反馈 5 个问题，逐项修复（每项独立提交 + �
   （语音 CLI / MCP wrapper 的显式凭据通道）
 - 安全基线 §4「令牌门」改写为可选化语义；test-audit-bridge 钉死「无令牌放行 + 跨站 Origin
   写仍 403 + 错令牌仍 401」
+
+### 控制台令牌彻底移除（2026-11-16，同日跟进）
+
+可选化仍留下一条死代码链（自动生成/落盘、设置页、MCP/CLI 读文件）。彻底移除：
+
+- bridge：删 loadOrCreateConsoleToken、启动令牌解析与整段鉴权门（含根路径 401 输令牌页）；
+  x-console-token 头即便出现也只是普通头，不参与任何判定
+- security-routes：删 /api/console/token 路由；MCP wrapper / send-voice.mjs：删令牌读取与头
+- console.html：删令牌设置卡片、显示切换、?token= 收藏与 localStorage 全链路
+- config-defaults / config.example.json / README：consoleToken 字段移除
+- 安全边界说明：本机其他用户/进程从此可直接调用管理 API（此前靠令牌+ACL 挡），
+  这是会话方明确接受的取舍；浏览器侧威胁（跨站/劫持）仍由四层兜底
+- 遗留：旧的 state/console-token 文件成为孤儿，可手动删除；外部语音工具若读不到它会自行降级
+- 测试：test-audit-bridge 改钉「无令牌放行 + 跨站写仍拒」；test-security-routes 删令牌路由用例；
+  test-config 断言字段已移除；各测试 helper 的 x-console-token 头清理

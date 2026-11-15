@@ -35,9 +35,8 @@ async function withBridge(run, config = {}, globals = {}) {
   const st = h.getSocialV2State(KEY);
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
-  const request = (route, { token = st.agentToken, consoleToken = 'fixture-console-token', key = KEY, query = '' } = {}) => new Promise((resolve, reject) => {
+  const request = (route, { token = st.agentToken, key = KEY, query = '' } = {}) => new Promise((resolve, reject) => {
     const headers = {};
-    if (consoleToken) headers['x-console-token'] = consoleToken;
     if (token) headers['x-agent-token'] = token;
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port,
       path: `${route.startsWith('/') ? route : `/api/socialV2/${route}`}?key=${encodeURIComponent(key)}${query}`,
@@ -63,7 +62,12 @@ await test('group-members 返回 userId/nickname/card，并带 count/truncated',
     assert.equal(out.data.truncated, false);
     assert.deepEqual(out.data.members.map((m) => m.userId), ['111', '222', '123'], 'userId 必须是字符串（模型要拿它 @ 人）');
     assert.equal(out.data.members[0].nickname, '小明');
-    assert.equal(out.data.members[2].role, 'owner');
+    // 332a060：agent 视角隐藏管理员身份（role/isOwner 不下发）
+    assert.equal(out.data.members[2].role, undefined);
+    // 无凭据 = 操作者通道（2026-11-16 起控制台无令牌）：控制台视角保留管理员身份
+    const consoleView = await request('group-members', { token: '' });
+    assert.equal(consoleView.status, 200);
+    assert.equal(consoleView.data.members[2].role, 'owner');
   });
 });
 
@@ -81,9 +85,9 @@ await test('group-members 令牌校验：代理令牌错 / 什么令牌都没有
     // 代理令牌存在但不对 → 403（这是 v2 读工具的统一口径）
     const badToken = await request('group-members', { token: 'deadbeef' });
     assert.equal(badToken.status, 403, JSON.stringify(badToken.data));
-    // 既没有代理令牌、也没有控制台令牌 → 不该被当成操作者放行
-    const nothing = await request('group-members', { token: '', consoleToken: '' });
-    assert.ok([401, 403].includes(nothing.status), `无凭据必须拒绝，实际 ${nothing.status}`);
+    // 控制台令牌已移除（2026-11-16）：无凭据 = 操作者本机通道，放行（控制台视角）
+    const nothing = await request('group-members', { token: '' });
+    assert.equal(nothing.status, 200, `无凭据现在是操作者通道，实际 ${nothing.status}`);
     const privateKey = await request('group-members', { key: 'private:123', token: st.agentToken });
     assert.equal(privateKey.status, 400, '私聊没有群成员概念，必须明确报错而不是瞎查');
     const badKey = await request('group-members', { key: 'group:not-a-number' });
@@ -110,7 +114,7 @@ await test('closed-agent（管理员私聊，无令牌）仍能查白名单群�
   const get = (query) => new Promise((resolve, reject) => {
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port,
       path: `/api/socialV2/group-members?key=${encodeURIComponent(KEY)}${query}`,
-      method: 'GET', headers: { 'x-console-token': 'fixture-console-token' } }, (res) => {
+      method: 'GET', headers: {} }, (res) => {
       let data = ''; res.setEncoding('utf8');
       res.on('data', (c) => { data += c; });
       res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } catch (e) { reject(e); } });
@@ -125,7 +129,7 @@ await test('closed-agent（管理员私聊，无令牌）仍能查白名单群�
     const denied = await new Promise((resolve, reject) => {
       const req = http.request({ hostname: '127.0.0.1', port: server.address().port,
         path: '/api/socialV2/group-members?key=group%3A999999', method: 'GET',
-        headers: { 'x-console-token': 'fixture-console-token' } }, (res) => {
+        headers: {} }, (res) => {
         let data = ''; res.setEncoding('utf8');
         res.on('data', (c) => { data += c; });
         res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(data) }));

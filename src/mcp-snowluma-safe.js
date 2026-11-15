@@ -108,26 +108,6 @@ function agentApiBase() {
   const port = Number(getConfig().consolePort) || 3100;
   return `http://127.0.0.1:${port}`;
 }
-function readConsoleToken() {
-  // 每次请求都重新读取，优先 config.json 里的 consoleToken，其次 state/console-token，
-  // 避免 token 变化后 MCP 仍使用启动时缓存的旧值导致一直 401。
-  //
-  // 必须与桥接的校验口径**完全一致**（bridge.js 的 startConsoleServer：长度 16~128、
-  // 只允许 [A-Za-z0-9_-]，不合法就忽略并回退 state/console-token）。否则用户手填一个
-  // 短令牌时桥接会正常运行，而 MCP 拿着这个桥接根本不认的值去请求 —— 每个工具都 401，
-  // 且错误信息里看不出原因是"config.json 里的令牌格式不合法"。
-  try {
-    const c = getConfig();
-    const configured = String(c.consoleToken ?? '').trim();
-    if (/^[A-Za-z0-9_-]{16,128}$/.test(configured)) return configured;
-  } catch {}
-  try {
-    const tokenFile = path.join(ROOT, 'state', 'console-token');
-    return fs.readFileSync(tokenFile, 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
 
 /**
  * 把桥接返回的 `error` 变成可读文本。
@@ -170,22 +150,18 @@ async function agentApi(path, init = {}) {
 }
 
 /**
- * 桥接 API 请求头（含控制台令牌、x-agent-call 与调用方附加头）。
- * 拆出来是为了长轮询通道复用同一套鉴权，避免两条通路口径漂移。
+ * 桥接 API 请求头（x-agent-call 与调用方附加头）。
+ * 拆出来是为了长轮询通道复用同一套头，避免两条通路口径漂移。
  */
 function agentHeaders(extra = {}) {
-  const consoleToken = readConsoleToken();
   const headers = {
     'content-type': 'application/json',
-    ...(consoleToken ? { 'x-console-token': consoleToken } : {}),
     ...(extra ?? {})
   };
   // 声明「这是一次智能体调用」。桥接据此把「没带会话令牌」判定为**拒绝**，而不是
-  // 退化成「管理端全权」——所以这个头绝不能随 token 一起被省略。历史上 331/355/379/877
+  // 退化成「操作者全权」——所以这个头绝不能被省略。历史上 331/355/379/877
   // 行用 `...(token ? {headers:{...}} : {})` 把整个头省掉了，于是「模型漏传 token」
-  // 不是被拒绝，反而提权成控制台权限（confused deputy）。
-  // 令牌本身仍然只在真有时才发：/api/status 的模式探测（legacyReadToolAllowed）本来就是
-  // 无令牌调用，桥接对它单独放行并按最小对象返回。
+  // 不是被拒绝，反而提权成操作者权限（confused deputy）。
   headers['x-agent-call'] = '1';
   return headers;
 }

@@ -325,10 +325,10 @@ console.log('## 回归：AI 通道的语音库响应不许带出绝对路径（P
 if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
   console.log('## live：桥接 voice 端点 dry-run');
   if (!fs.existsSync(path.join(ROOT, 'config.json'))) {
-    // live 段要打**真的**桥接：端口、consoleToken、白名单群号、语音库目录全部来自
+    // live 段要打**真的**桥接：端口、白名单群号、语音库目录全部来自
     // 用户本机 config.json。config.example.json 给不出这些（groups 是空的），
     // 硬跑只会得到"前置条件不足"这种假失败 —— 如实跳过（措辞与 skipVoiceTool 同款）。
-    console.log('  ⏭  跳过：live 段需要本机 config.json（端口/consoleToken/白名单群号/语音库目录）');
+    console.log('  ⏭  跳过：live 段需要本机 config.json（端口/白名单群号/语音库目录）');
     console.log('     原因：config.json 被 .gitignore（含真实 QQ 号/token），config.example.json 给不出这些值');
     console.log('     想跑这段：先照 config.example.json 建好自己的 config.json，再设 QQ_BRIDGE_TEST_LIVE=1。');
     console.log('     注意：这是**跳过，不是通过** —— 这台机器上没有覆盖到 live 链路。');
@@ -336,10 +336,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
     const port = Number(cfg.consolePort) || 3100;
-    let token = String(cfg.consoleToken ?? '').trim();
-    if (!token) {
-      try { token = fs.readFileSync(path.join(ROOT, 'state', 'console-token'), 'utf8').trim(); } catch {}
-    }
+
     const target = (cfg.allow?.groups ?? [])[0];
     const dir = path.resolve(ROOT, String(cfg.socialV2?.voice?.dir ?? 'audio'));
     const first = listAudioFiles(dir)[0];
@@ -348,7 +345,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
     } else {
       const res = await fetch(`http://127.0.0.1:${port}/api/voice/send`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(token ? { 'x-console-token': token } : {}) },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ target: `group:${target}`, file: first, dryRun: true }),
         signal: AbortSignal.timeout(30000)
       });
@@ -358,7 +355,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
       // 白名单外目标必须被拒
       const denied = await fetch(`http://127.0.0.1:${port}/api/voice/send`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(token ? { 'x-console-token': token } : {}) },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ target: 'group:100004', file: first, dryRun: true }),
         signal: AbortSignal.timeout(30000)
       });

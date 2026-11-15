@@ -101,7 +101,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     assert.ok(h.state.sessionPolicies['private:123'], 'policy should exist before reset');
     h.calls.cancelled.length = 0;
     const status = await new Promise((resolve, reject) => {
-      const request = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/session/reset?token=fixture-console-token', method: 'POST',
+      const request = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/session/reset', method: 'POST',
         headers: { 'content-type': 'application/json' } }, (response) => {
         response.resume();
         response.on('end', () => resolve(response.statusCode));
@@ -331,9 +331,9 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
   finally { await h.close(); }
 }
 
-// agent token 默认拒绝：MCP 的 v2 工具同时携带 x-console-token 与 x-agent-token，
-// 因此仅靠控制台令牌挡不住 QQ 群里的 AI。人格/提示词/思考强度/白名单/重启等管理端点
-// 必须对 agent token 一律 403，否则 AI 能改写自己的系统提示词或给自己提权。
+// agent token 默认拒绝：MCP 的 v2 工具携带 x-agent-token（控制台令牌已移除，
+// x-console-token 头即便出现也不参与判定）。人格/提示词/思考强度/白名单/重启等
+// 管理端点必须对 agent token 一律 403，否则 AI 能改写自己的系统提示词或给自己提权。
 {
   const h = await bridgeHarness();
   const server = h.startConsoleServer();
@@ -353,7 +353,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       request.setTimeout(3000, () => request.destroy(new Error('request hung')));
       request.end(body === undefined ? undefined : JSON.stringify(body));
     });
-    const adminOnly = { 'x-console-token': 'fixture-console-token' };
+    const adminOnly = {};
     const asAgent = { ...adminOnly, 'x-agent-token': 'fixture-agent-token' };
     const mustDeny = [
       ['GET', '/api/roles'], ['GET', '/api/roles/content?name=x'], ['GET', '/api/roles?x=1'],
@@ -363,7 +363,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       ['GET', '/api/preset/sim-prompt/backups'], ['POST', '/api/preset/sim-prompt/restore'],
       ['GET', '/api/dsh/model'], ['POST', '/api/dsh/effort'],
       ['GET', '/api/whitelist'], ['POST', '/api/whitelist'], ['POST', '/api/restart'],
-      ['POST', '/api/console/token'], ['GET', '/api/role'], ['POST', '/api/role'],
+      ['GET', '/api/role'], ['POST', '/api/role'],
     ];
     for (const [method, path] of mustDeny) {
       const res = await call(path, method, asAgent, method === 'POST' ? {} : undefined);
@@ -384,8 +384,8 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
   } catch (error) { failures++; console.error('FAIL agent token admin isolation:', error.message); }
   finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
 }
-// ── 控制台入口的传输层防护：Host 头 + 令牌定长比较 + /api/authorize/read 鉴权 ──
-// 这三条都是「审计发现 → 加固」的结果，钉住它们以防以后被无意改回去。
+// ── 控制台入口的传输层防护：Host 头白名单 + 令牌移除后的放行语义 + authorize/read 鉴权 ──
+// 都是「审计发现 → 加固 → 会话方免密钥取舍」的结果，钉住以防被无意改回去。
 {
   const h = await bridgeHarness();
   const server = h.startConsoleServer();
@@ -405,9 +405,9 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       request.setTimeout(3000, () => request.destroy(new Error('request hung')));
       request.end(body === undefined ? undefined : JSON.stringify(body));
     });
-    const admin = { 'x-console-token': 'fixture-console-token' };
+    const admin = {};
 
-    // ① DNS rebinding 硬化：非本机 Host 一律拒绝（即使带着正确的控制台令牌）。
+    // ① DNS rebinding 硬化：非本机 Host 一律拒绝。
     // 注意 Host 必须走 headers（Node 会用 options.host 覆盖它，那样测不到伪造 Host）。
     for (const host of ['evil.example.com:' + port, '127.0.0.1:1', 'localhost']) {
       const res = await call('/api/status', 'GET', { ...admin, host });
@@ -419,17 +419,10 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       assert.equal(res.status, 200, `Host=${host} 应被接受，实际 HTTP ${res.status}`);
     }
 
-    // ② 令牌比较必须是定长：错长度/错内容的令牌都不得通过（不能因为"前缀对"就放行）。
-    // 注意 Node 的 HTTP 客户端会自动裁掉自定义头的首尾空白，所以"带尾空格"这一类
-    // 必须用 ?token= 传（控制台本来就接受这种入口，它才是真实的攻击面）。
-    for (const token of ['fixture-console-token-x', 'fixture-console-toke', 'FIXTURE-CONSOLE-TOKEN', 'fixture-console-token ']) {
-      const res = await call(`/api/status?token=${encodeURIComponent(token)}`, 'GET');
-      assert.equal(res.status, 401, `令牌「${token}」不得通过鉴权，实际 HTTP ${res.status}`);
-    }
-    // （2026-11-16）令牌可选化：不带令牌的回环请求放行——跨站/劫持防护由 Host 白名单、
-    // JSON-only+Origin 写防护与跨站 GET 不可读兜底；带错令牌仍 401（上面已钉）。
+    // （2026-11-16）令牌已彻底移除：不带令牌的回环请求放行——跨站/劫持防护由 Host 白名单、
+    // JSON-only+Origin 写防护与跨站 GET 不可读兜底。
     const noHeader = await call('/api/status', 'GET');
-    assert.equal(noHeader.status, 200, '不带令牌的回环请求应放行（令牌可选）');
+    assert.equal(noHeader.status, 200, '不带令牌的回环请求应放行（令牌已移除）');
     await h.ensureSession('private:123');
     const noTokenWrite = await call('/api/session/reset', 'POST', {}, { key: 'private:123' });
     assert.equal(noTokenWrite.status, 200, '不带令牌的回环写请求也应放行（JSON+无 Origin）');
@@ -439,7 +432,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     // ③ /api/authorize/read 不再接受空令牌（它曾对 agent 流量开放 ⇒ 成为免鉴权入口）。
     const noToken = await call('/api/authorize/read', 'POST', { ...admin, 'x-agent-token': 'x' }, { key: 'group:456' });
     assert.equal(noToken.status, 403, '空会话令牌必须被拒绝');
-    console.log('PASS console rejects foreign Host headers and non-exact tokens; token-less requests pass; cross-site writes still denied');
+    console.log('PASS console rejects foreign Host headers; token-less requests pass; cross-site writes still denied');
   } catch (error) { failures++; console.error('FAIL console transport guards:', error.message); }
   finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
 }

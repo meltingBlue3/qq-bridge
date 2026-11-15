@@ -20,7 +20,7 @@ async function fixture(run, cfg = {}) {
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port,
       path: `/api/socialV2/${route}?key=${encodeURIComponent(key)}`,
       method: body === undefined ? 'GET' : 'POST',
-      headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
+      headers: { 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
     }, res => {
       let raw = '';
       res.on('data', chunk => { raw += chunk; });
@@ -35,7 +35,7 @@ async function fixture(run, cfg = {}) {
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port,
       path: `/api/socialV2/${route}?key=${encodeURIComponent(key)}${query}`,
       method: 'GET',
-      headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken },
+      headers: { 'x-agent-token': st.agentToken },
     }, res => {
       let raw = '';
       res.on('data', chunk => { raw += chunk; });

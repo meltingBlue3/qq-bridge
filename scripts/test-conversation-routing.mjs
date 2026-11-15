@@ -16,7 +16,7 @@ async function setup(t, options = {}) {
   async function call(method, endpoint, body, headers = {}) {
     return new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: server.address().port, path: endpoint, method,
-        headers: { 'x-console-token': 'fixture-console-token', 'content-type': 'application/json', ...headers } }, (res) => {
+        headers: { 'content-type': 'application/json', ...headers } }, (res) => {
         let text = ''; res.setEncoding('utf8'); res.on('data', (chunk) => { text += chunk; });
         res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(text) }));
       });

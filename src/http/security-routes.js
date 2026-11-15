@@ -1,11 +1,10 @@
-// 控制台「访问与安全」路由组：安全拦截通知设置 + state/ ACL 重试 + 控制台令牌修改。
+// 控制台「访问与安全」路由组：安全拦截通知设置 + state/ ACL 重试。
 //
 // 从 startConsoleServer() 整块搬出；依赖显式传入，路由不接触 bridge 闭包。
-// 令牌是本文件唯一"易变原语"：通过 getConsoleToken/setConsoleToken 回调读写。
+// （控制台访问令牌已于 2026-11-16 彻底移除，本文件不再有易变原语。）
 
-import crypto from 'node:crypto';
 import path from 'node:path';
-import { atomicWriteJson, atomicWriteText, readConfigObject } from '../json-file.js';
+import { atomicWriteJson, readConfigObject } from '../json-file.js';
 import { manualDirCommand } from '../state-acl.mjs';
 
 /**
@@ -18,8 +17,6 @@ export async function handleSecurityRoutes({ req, url, sendJson, readBody, deps 
     getStateDirHardened,
     setStateDirHardened,
     hardenStateDirAcl,
-    getConsoleToken,
-    setConsoleToken,
     root,
     log
   } = deps;
@@ -61,38 +58,6 @@ export async function handleSecurityRoutes({ req, url, sendJson, readBody, deps 
     cfg.security = { ...(cfg.security ?? {}), ...next };
     log(`控制台：安全拦截通知已更新（interceptNotify=${cfg.security.interceptNotify}）`);
     sendJson({ ok: true, security: cfg.security });
-    return true;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/console/token') {
-    const body = await readBody();
-    let newToken = String(body.token ?? '').trim();
-    const generated = !newToken;
-    if (generated) {
-      newToken = crypto.randomBytes(24).toString('hex');
-    }
-    if (newToken.length < 16) {
-      sendJson({ ok: false, error: '控制台访问令牌至少需要 16 位；留空可生成随机令牌' }, 400);
-      return true;
-    }
-    if (newToken.length > 128) {
-      sendJson({ ok: false, error: '控制台访问令牌不能超过 128 位' }, 400);
-      return true;
-    }
-    if (!/^[A-Za-z0-9_-]+$/.test(newToken)) {
-      sendJson({ ok: false, error: '控制台访问令牌只能包含字母、数字、下划线或短横线' }, 400);
-      return true;
-    }
-    const configFile = path.join(root, 'config.json');
-    const file = readConfigObject(configFile);
-    // 手动令牌写入 config.json（用户可见、可再改）；随机令牌写入 state/console-token 并清空 config 中的手动值。
-    file.consoleToken = generated ? '' : newToken;
-    atomicWriteJson(configFile, file);
-    cfg.consoleToken = generated ? '' : newToken;
-    atomicWriteText(path.join(stateDir, 'console-token'), newToken);
-    setConsoleToken(newToken);
-    log(`控制台：访问令牌已${generated ? '重新生成' : '手动修改'}（不记录完整值）`);
-    sendJson({ ok: true, token: newToken, generated });
     return true;
   }
 

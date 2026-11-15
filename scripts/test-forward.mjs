@@ -96,9 +96,8 @@ try {
 }
 
 // 5. 桥接端点安全拒绝（可选，桥接运行且状态存在时）
-const consoleTokenFile = path.join(ROOT, 'state', 'console-token');
 const socialV2File = path.join(ROOT, 'state', 'social-v2.json');
-if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
+if (fs.existsSync(socialV2File)) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
     const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
@@ -115,12 +114,12 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
     const conv = social?.conversations
       ? (Object.entries(social.conversations).find(([k]) => isAllowedKey(k)) ?? null)
       : null;
-    const consoleToken = fs.readFileSync(consoleTokenFile, 'utf8').trim();
+
     if (conv) {
       const [key, st] = conv;
       const agentToken = st?.agentToken;
       const urlBase = `http://127.0.0.1:${config.consolePort || 3100}/api/socialV2/forward-message`;
-      const authHeaders = { 'x-console-token': consoleToken };
+      const authHeaders = {};
       if (agentToken) {
         // 未带 agent token 应被拒绝（reserved2）
         const resNoToken = await fetch(`${urlBase}?key=${encodeURIComponent(key)}&id=abc`, { headers: authHeaders, signal: AbortSignal.timeout(5000) });
@@ -141,7 +140,7 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
     console.log(`⚠️ 桥接端点检查跳过：${error?.message ?? error}`);
   }
 } else {
-  console.log('⚠️ 跳过桥接端点检查：缺少 state/console-token 或 state/social-v2.json');
+  console.log('⚠️ 跳过桥接端点检查：缺少 state/social-v2.json');
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`);

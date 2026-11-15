@@ -185,24 +185,13 @@ function settingFromDshNamespace(ns, key) {
   return undefined;
 }
 
-// 控制台鉴权 token：未配置时自动生成并持久化到 state/console-token，避免默认无鉴权。
-function loadOrCreateConsoleToken() {
-  const tokenFile = path.join(STATE_DIR, 'console-token');
-  try {
-    const existing = fs.readFileSync(tokenFile, 'utf8').trim();
-    if (existing) return existing;
-  } catch {}
-  const token = crypto.randomBytes(24).toString('hex');
-  atomicWriteText(tokenFile, token);
-  return token;
-}
 
 /**
  * 收紧 state/ 的访问权限。
  *
  * **Windows 上 `mode: 0o600` 是空操作**（实测：chmod 之后 ACL 不变），文件继承父目录 ACL ——
- * 本机 state/console-token 实测为 `NT AUTHORITY\Authenticated Users:(M)`，也就是任何能登录
- * 这台机器的用户都能读走控制台令牌、Snowluma accessToken、各会话 agentToken 和全部 QQ 聊天记录。
+ * 收紧前本机 state/ 实测为 `NT AUTHORITY\Authenticated Users:(M)`，也就是任何能登录
+ * 这台机器的用户都能读走 Snowluma accessToken、各会话 agentToken 和全部 QQ 聊天记录。
  * 这里用 icacls 切断 state/ 的继承链，只保留「当前用户 + SYSTEM + Administrators」。
  *
  * ⚠️ 具体实现已抽到 `src/state-acl.mjs`（与 scripts/harden-state-acl.mjs 共用同一份）。
@@ -864,7 +853,7 @@ async function main() {
   //
   // 两条通道，闸门不同（与 /api/send/* 的既有分层一致）：
   //   - agent=true ：QQ 群里的 AI 调用。必须带有效 agent token，且只能发它自己那个会话。
-  //   - agent=false：操作者（CLI / 控制台，凭 consoleToken）。跳过会话/模式闸门，
+  //   - agent=false：操作者（CLI / 控制台）。跳过会话/模式闸门，
   //                  但仍强制白名单 + 语音限流 + 敏感词审计。
   // 语音发送时间戳（scopeKey → number[]）：与文本发送分开计数，语音额度独立。
   const voiceSendTimes = new Map();
@@ -2543,24 +2532,14 @@ async function main() {
 
   function startConsoleServer() {
     const port = cfg.consolePort ?? 3100;
-    // 控制台鉴权：优先用 config.consoleToken，未配置则自动生成并持久化，不再默认无鉴权。
-    // 使用 let 以便控制台内手动修改令牌后热更新。
-    const configuredToken = String(cfg.consoleToken ?? '').trim();
-    const tokenValid = configuredToken.length >= 16 && configuredToken.length <= 128 && /^[A-Za-z0-9_-]+$/.test(configuredToken);
-    let consoleToken = tokenValid ? configuredToken : loadOrCreateConsoleToken();
-    // 令牌必须非空才继续。下面鉴权处原来的写法是「令牌为空 ⇒ return true（放行）」，
-    // 注释写着"启动时已自动生成并持久化"—— 等于承认那一行不可达，可它是一条**失败开放**的分支：
-    // 一旦真的空了（写盘异常被吞、以后新增"关闭鉴权"之类的配置），控制台上那些
-    // 改配置 / 发消息 / 读聊天记录的接口会变成完全免鉴权，而 Host 白名单只挡跨机访问、
-    // 挡不住本机进程。这里改成失败关闭：宁可启动时报错，也不要静默开着一个无鉴权的管理 API。
-    if (!consoleToken) throw new Error('控制台令牌为空：拒绝以无鉴权方式启动控制台 API');
-    if (!tokenValid && configuredToken) log(`控制台 config.consoleToken 长度/字符不合法，已忽略并回退到自动生成令牌`);
-    if (!configuredToken) log(`控制台未配置 consoleToken，已自动生成：${String(consoleToken).slice(0, 6)}…（完整值保存在 state/console-token）`);
+    // 控制台访问令牌已于 2026-11-16 彻底移除（会话方要求免输密钥）。控制台 API 的安全由
+    // 以下各层承担：只监听 127.0.0.1、Host 白名单（DNS rebinding）、非 GET 必须
+    // application/json + Origin 本机（CSRF）、跨站 GET 响应无 CORS 头不可读。
     // 二代会话级隔离：MCP 工具调用时若带 x-agent-token，则必须匹配该会话的 agentToken。
-    // 控制台/管理端请求不带此头，仍走 consoleToken 管理通道。
+    // 控制台/管理端请求不带此头，走的是同一台服务器上的操作者通道。
     //
     // 定长比较：会话令牌同样是凭据，`===` 会在首个不同字符处短路，本机进程理论上
-    // 可用响应时延逐字节试探。与控制台令牌（见下方 timingSafeEqual）保持一致。
+    // 可用响应时延逐字节试探。
     const tokenEq = (a, b) => {
       if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
       const x = Buffer.from(a, 'utf8');
@@ -2625,8 +2604,7 @@ async function main() {
       getStateDirHardened: () => stateDirHardened,
       setStateDirHardened: (value) => { stateDirHardened = value; },
       hardenStateDirAcl,
-      getConsoleToken: () => consoleToken,
-      setConsoleToken: (value) => { consoleToken = value; },
+
       root: ROOT,
       log
     };
@@ -3035,36 +3013,16 @@ async function main() {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
-      // 控制台鉴权：令牌**可选**（2026-11-16 会话方反馈：本机开控制台还要翻启动日志找
-      // 链接或手填令牌，太磨人）。带了就必须精确匹配——错令牌仍 401（fail loud 防误配）；
-      // 不带则放行，安全由其余各层兜底：只监听 127.0.0.1、Host 白名单（DNS rebinding）、
-      // 非 GET 必须 application/json + Origin 本机（CSRF）、跨站 GET 响应无 CORS 头不可读。
-      // 令牌继续作为语音 CLI / MCP wrapper 的显式凭据通道。
-      // 定长比较：`!==` 会在第一个不同的字符处短路，理论上可被本机进程用响应时延逐字节试探。
-      // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
-      const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
-      const tokenMatches = (() => {
-        if (!consoleToken) return false; // 上面已拒绝空令牌；真出现也只许失败关闭，绝不 return true
-        const a = Buffer.from(suppliedToken, 'utf8');
-        const b = Buffer.from(consoleToken, 'utf8');
-        if (a.length !== b.length) return false;
-        return crypto.timingSafeEqual(a, b);
-      })();
-      if (suppliedToken !== '' && !tokenMatches) {
-        if (req.method === 'GET' && url.pathname === '/') {
-          res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
-          res.end('<!doctype html><meta charset="utf-8"><title>需要令牌</title><script>const t=prompt(\'请输入控制台访问令牌\');if(t)location.href=\'/?token=\'+encodeURIComponent(t);</script>');
-        } else {
-          sendJson({ ok: false, error: '未授权：请提供控制台访问令牌' }, 401);
-        }
-        return;
-      }
+      // 控制台鉴权：**无令牌**（2026-11-16 彻底移除 consoleToken）。安全由以下各层承担：
+      // 只监听 127.0.0.1、Host 白名单（DNS rebinding）、非 GET 必须 application/json +
+      // Origin 本机（CSRF）、跨站 GET 响应无 CORS 头不可读。x-console-token 即便出现
+      // 也只是普通请求头，不参与任何判定。
       // 智能体调用隔离：具体规则（带令牌白名单、无令牌窄面、管理端专用接口、只读降级）
       // 全部集中在 src/route-policy.js 的 authorizeAgentRequest()。这里不再手写分支，
       // 避免“新增端点时忘记补一处”再次退化成 confused deputy。
       // CSRF 防护：所有写操作必须是 application/json，且（若带 Origin）必须来自本机页面。
-      // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
-      // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
+      // 这层不依赖任何令牌：任意网页用表单/跨站请求触发 /api/restart、
+      // /api/workspace/reset、/api/role 等破坏性接口，在这里就被拦下。
       if (req.method !== 'GET') {
         const ctype = String(req.headers['content-type'] ?? '');
         if (!ctype.toLowerCase().includes('application/json')) {
@@ -3103,7 +3061,8 @@ async function main() {
           }
         }
         if (await handleConversationRoutes({ req, url, readBody, sendJson,
-          auth: { kind: routeAuth.actor, authenticated: tokenMatches },
+          // 令牌已移除：console actor 即操作者本机请求；agent/tokenless 冒充由 kind 与 agent 头检查挡下。
+          auth: { kind: routeAuth.actor, authenticated: routeAuth.actor === 'console' },
           deps: { store: conversationPolicies, getLegacy: () => {
               if (!dshReady) throw new Error('DSH 尚未就绪，请等待模式与 preset 加载后再迁移');
               return { mode: currentMode, ownerQQ: cfg.ownerQQ };
@@ -3122,7 +3081,7 @@ async function main() {
             } },
         })) return;
         if (url.pathname === '/api/delivery') {
-          if (routeAuth.actor !== 'console' || !tokenMatches) {
+          if (routeAuth.actor !== 'console') {
             sendJson({ ok: false, error: '交付记录仅允许已认证的控制台' }, 403); return;
           }
           if (req.method === 'GET') {

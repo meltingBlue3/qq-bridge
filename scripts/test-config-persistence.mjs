@@ -27,7 +27,7 @@ async function withConsole(run, files = {}) {
   const configFile = path.join(h.temp, 'config.json');
   const post = async (endpoint, body) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}${endpoint}`, {
-      method: 'POST', headers: { 'x-console-token': 'fixture-console-token', 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
     return { status: response.status, body: await response.json() };
