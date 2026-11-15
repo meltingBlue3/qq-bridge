@@ -426,13 +426,20 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       const res = await call(`/api/status?token=${encodeURIComponent(token)}`, 'GET');
       assert.equal(res.status, 401, `令牌「${token}」不得通过鉴权，实际 HTTP ${res.status}`);
     }
+    // （2026-11-16）令牌可选化：不带令牌的回环请求放行——跨站/劫持防护由 Host 白名单、
+    // JSON-only+Origin 写防护与跨站 GET 不可读兜底；带错令牌仍 401（上面已钉）。
     const noHeader = await call('/api/status', 'GET');
-    assert.equal(noHeader.status, 401, '不带令牌必须被拒绝');
+    assert.equal(noHeader.status, 200, '不带令牌的回环请求应放行（令牌可选）');
+    await h.ensureSession('private:123');
+    const noTokenWrite = await call('/api/session/reset', 'POST', {}, { key: 'private:123' });
+    assert.equal(noTokenWrite.status, 200, '不带令牌的回环写请求也应放行（JSON+无 Origin）');
+    const driveBy = await call('/api/session/reset', 'POST', { origin: 'https://evil.example.com' }, { key: 'private:123' });
+    assert.equal(driveBy.status, 403, '跨站 Origin 的写请求必须仍被拒（令牌可选化后 CSRF 层兜底）');
 
     // ③ /api/authorize/read 不再接受空令牌（它曾对 agent 流量开放 ⇒ 成为免鉴权入口）。
     const noToken = await call('/api/authorize/read', 'POST', { ...admin, 'x-agent-token': 'x' }, { key: 'group:456' });
     assert.equal(noToken.status, 403, '空会话令牌必须被拒绝');
-    console.log('PASS console rejects foreign Host headers, non-exact tokens and token-less authorize/read');
+    console.log('PASS console rejects foreign Host headers and non-exact tokens; token-less requests pass; cross-site writes still denied');
   } catch (error) { failures++; console.error('FAIL console transport guards:', error.message); }
   finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
 }

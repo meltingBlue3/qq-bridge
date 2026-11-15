@@ -59,7 +59,7 @@
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
 | 只监听回环 | `server.listen(port, '127.0.0.1')` | 永不绑 `0.0.0.0` |
-| 令牌门 | 请求最前面 | **所有**路由（读+写）都要 `x-console-token` 或 `?token=`；未配置时启动自动生成 192 bit 随机值 |
+| 令牌门（可选化，2026-11-16） | 请求最前面 | 带 `x-console-token` / `?token=` 必须精确匹配（错令牌一律 401）；**不带则放行**——会话方要求免输密钥，跨站/劫持防护由 Host 白名单、JSON-only+Origin 写防护与跨站 GET 不可读兜底；未配置时启动仍自动生成 192 bit 随机值，令牌继续作为语音 CLI / MCP 的显式凭据 |
 | 定长比较 | `crypto.timingSafeEqual` | 比较前先比长度，避免 `!==` 短路带来的时延侧信道 |
 | Host 校验 | 请求最前面 | Host 必须是 `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`，否则 403（DNS rebinding 硬化） |
 | CSRF | 非 GET 请求 | 必须 `content-type: application/json`；若带 `Origin`，其 host 必须等于本机 |
@@ -164,7 +164,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；模式切换会退役旧会话。DSH preset 清单不可用时，模式、owner、白名单/黑名单变化仍立即撤销旧映射、轮换 token 并清理唤醒定时器；清单故障本身不会退役权限未变的会话（`test-policy-revocation.mjs`）
 - [x] 预设清单不可用时**拒绝**建群聊会话（不回退到默认预设）
 - [x] agent token 无法访问任何管理端点；空 agent token 被拒
-- [x] 控制台伪造 `Host` 被拒；错令牌（含错长度、大小写、尾空格）被拒
+- [x] 控制台伪造 `Host` 被拒；错令牌（含错长度、大小写、尾空格）被拒；无令牌回环放行，跨站 Origin 写请求仍被拒
 - [x] `/api/authorize/read` 空令牌被拒
 - [x] agent 令牌只能读自己会话；跨会话读返回 403
 - [x] 语音只能取语音库内的文件（含 `allowAbsolutePath=true` 与相对穿越两种情形）

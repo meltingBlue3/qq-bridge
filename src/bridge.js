@@ -3035,7 +3035,11 @@ async function main() {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
-      // 控制台鉴权：所有请求需带 x-console-token 或 ?token=
+      // 控制台鉴权：令牌**可选**（2026-11-16 会话方反馈：本机开控制台还要翻启动日志找
+      // 链接或手填令牌，太磨人）。带了就必须精确匹配——错令牌仍 401（fail loud 防误配）；
+      // 不带则放行，安全由其余各层兜底：只监听 127.0.0.1、Host 白名单（DNS rebinding）、
+      // 非 GET 必须 application/json + Origin 本机（CSRF）、跨站 GET 响应无 CORS 头不可读。
+      // 令牌继续作为语音 CLI / MCP wrapper 的显式凭据通道。
       // 定长比较：`!==` 会在第一个不同的字符处短路，理论上可被本机进程用响应时延逐字节试探。
       // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
       const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
@@ -3046,7 +3050,7 @@ async function main() {
         if (a.length !== b.length) return false;
         return crypto.timingSafeEqual(a, b);
       })();
-      if (consoleToken && !tokenMatches) {
+      if (suppliedToken !== '' && !tokenMatches) {
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
           res.end('<!doctype html><meta charset="utf-8"><title>需要令牌</title><script>const t=prompt(\'请输入控制台访问令牌\');if(t)location.href=\'/?token=\'+encodeURIComponent(t);</script>');

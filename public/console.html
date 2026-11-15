@@ -2528,7 +2528,7 @@ button:active:not(:disabled) {
     </section>
 <section id="section-token" data-page="access" class="card">
       <h2>控制台访问令牌</h2>
-      <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
+      <div class="meta">本机打开控制台已不需要令牌（免输密钥）。令牌留给需要显式凭据的通道（语音 CLI / MCP / 脚本）：可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
       <input type="password" id="consoleTokenInput" placeholder="输入新令牌（至少 16 位），留空则生成随机" autocomplete="new-password">
       <div class="row" style="margin-top:8px">
         <button id="consoleTokenSave" class="small">保存令牌</button>
@@ -2667,7 +2667,8 @@ button:active:not(:disabled) {
 
 <script>
 (function () {
-  // 如果通过 ?token= 进入（控制台启用鉴权时根路径会重定向带 token），存到 localStorage
+  // 如果通过 ?token= 进入（外部工具/旧链接带令牌跳转），存到 localStorage；
+  // 本机直接打开控制台已不需要令牌（后端令牌可选化）。
   const qs = new URLSearchParams(location.search);
   const token = qs.get('token');
   if (token) {
@@ -2682,16 +2683,12 @@ async function api(path, method, body, _retried = 0) {
   if (token) headers['x-console-token'] = token;
   const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
   if (res.status === 401) {
-    if (_retried >= 2) {
+    // 本机访问不再需要令牌（后端已可选化）：401 只说明带着一个错的/陈旧的令牌——
+    // 丢掉后裸试一次；再 401 才是真被拒（非本机入口等），前端不再弹输入框。
+    if (token && _retried < 1) {
       localStorage.removeItem('consoleToken');
-      throw new Error('未授权');
-    }
-    const t = prompt('请输入控制台访问令牌：');
-    if (t) {
-      localStorage.setItem('consoleToken', t.trim());
       return api(path, method, body, _retried + 1);
     }
-    localStorage.removeItem('consoleToken');
     throw new Error('未授权');
   }
   return res.json();
@@ -4613,7 +4610,7 @@ function setConnectionError(error) {
   document.getElementById('metricSnowlumaHint').textContent = '当前状态可能已过期';
   document.getElementById('snowlumaWarn').style.display = 'none';
   const alert = document.getElementById('connectionAlert');
-  alert.textContent = error.message === '未授权' ? '访问令牌无效或已取消输入。请使用启动日志中的控制台链接重新打开。' : '无法连接桥接服务，当前显示的是上次同步结果。请检查桥接是否运行，再点击右上角刷新。';
+  alert.textContent = error.message === '未授权' ? '访问被拒绝。本机直接访问控制台无需令牌；若从非本机入口打开，请使用启动日志中的控制台链接。' : '无法连接桥接服务，当前显示的是上次同步结果。请检查桥接是否运行，再点击右上角刷新。';
   alert.hidden = false;
 }
 document.getElementById('refreshConsole').addEventListener('click', async function () {

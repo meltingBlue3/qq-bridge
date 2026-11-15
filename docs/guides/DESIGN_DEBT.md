@@ -225,3 +225,15 @@ QQ 侧长期使用者反馈 5 个问题，逐项修复（每项独立提交 + �
 - **防漂移校验 EOL 加固**：patch 产物钉 LF（`.gitattributes`）+ `buildPatches` 比对归一化
   CRLF——autocrlf 的 fresh checkout 不再误报「产物与源漂移」。
 
+
+### 控制台免密钥（2026-11-16）
+
+会话方反馈：打开控制台还要翻启动日志找带令牌的链接或手填令牌，太磨人，不需要。控制台令牌**可选化**：
+
+- 带令牌必须精确匹配（错令牌仍 401，fail loud 防误配）；**不带则放行**——安全由四层兜底：
+  只监听 127.0.0.1、Host 白名单（DNS rebinding）、非 GET 必须 application/json + Origin 本机
+  （CSRF）、跨站 GET 响应无 CORS 头本就不可读
+- 前端去掉 prompt 输入框：401 时丢掉陈旧令牌裸试一次，再拒才报错；设置页令牌入口保留
+  （语音 CLI / MCP wrapper 的显式凭据通道）
+- 安全基线 §4「令牌门」改写为可选化语义；test-audit-bridge 钉死「无令牌放行 + 跨站 Origin
+  写仍 403 + 错令牌仍 401」
